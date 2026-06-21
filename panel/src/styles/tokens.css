@@ -1,0 +1,152 @@
+/* ============================================================
+   TOKENS — Project Rumah Design System
+   Ported from design-systems/Project Rumah — Design System.html.
+
+   Two themes: dark (default) and light.
+   Dark uses `:root, :root[data-theme="dark"]` so a bare :root
+   still resolves dark — meaning the page is correctly themed
+   even before the React app hydrates. Light is opt-in via
+   [data-theme="light"] on <html>.
+
+   Color is reserved for information. Black + white only.
+   Accent = "you are here / active state", not decoration.
+   ============================================================ */
+
+:root,
+:root[data-theme="dark"] {
+  /* DARK palette (default): black bg, white fg. */
+  --paper:        #0a0a0a;
+  --ink:          #f5f5f5;
+  --gray-1:       #161616;  /* surface */
+  --gray-2:       #2a2a2a;  /* border, divider */
+  --gray-3:       #3d3d3d;  /* disabled, muted border */
+  --gray-4:       #8a8a8a;  /* secondary text */
+  --gray-5:       #c8c8c8;  /* primary muted text */
+
+  /* Information colors. Inverted to carry contrast on dark. */
+  --danger:       #ff6b6b;
+  --success:      #6bdc8a;
+  --focus:        #6b8aff;  /* WCAG: only for focus */
+
+  /* Mode accent (default = no mode = neutral violet). */
+  --accent:       #7c6cff;
+  --accent-glow:  rgba(124, 108, 255, 0.35);
+
+  /* Glass / surface translucency for sticky elements. */
+  --surface-glass: rgba(10, 10, 10, 0.7);
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  /* LIGHT palette (opt-in). Original tokens preserved verbatim. */
+  --paper:        #ffffff;
+  --ink:          #0a0a0a;
+  --gray-1:       #f5f5f5;  /* surface */
+  --gray-2:       #e8e8e8;  /* border, divider */
+  --gray-3:       #c8c8c8;  /* disabled, muted border */
+  --gray-4:       #6b6b6b;  /* secondary text */
+  --gray-5:       #2b2b2b;  /* primary muted text */
+
+  --danger:       #8a1a1a;
+  --success:      #1a4a1a;
+  --focus:        #0a4dff;  /* WCAG: only for focus */
+
+  --accent:       #5b4dff;
+  --accent-glow:  rgba(91, 77, 255, 0.22);
+
+  --surface-glass: rgba(255, 255, 255, 0.72);
+
+  color-scheme: light;
+}
+
+/* ============================================================
+   Mode accents — override the default --accent in BOTH themes.
+   Triggered by setting `data-mode` on a containing element.
+   ============================================================ */
+[data-mode="morning-rise"] {
+  --accent: #f59e0b;
+  --accent-glow: rgba(245, 158, 11, 0.35);
+}
+[data-mode="mid-day"] {
+  --accent: #38bdf8;
+  --accent-glow: rgba(56, 189, 248, 0.35);
+}
+[data-mode="afternoon-wind-down"] {
+  --accent: #fb7185;
+  --accent-glow: rgba(251, 113, 133, 0.35);
+}
+[data-mode="evening-wind-down"] {
+  --accent: #c084fc;
+  --accent-glow: rgba(192, 132, 252, 0.35);
+}
+[data-mode="night"] {
+  --accent: #818cf8;
+  --accent-glow: rgba(129, 140, 248, 0.35);
+}
+/* Light-theme overrides — slightly deeper for contrast on white. */
+:root[data-theme="light"] [data-mode="morning-rise"]         { --accent: #b45309; --accent-glow: rgba(180, 83, 9, 0.18); }
+:root[data-theme="light"] [data-mode="mid-day"]              { --accent: #0369a1; --accent-glow: rgba(3, 105, 161, 0.16); }
+:root[data-theme="light"] [data-mode="afternoon-wind-down"]  { --accent: #be123c; --accent-glow: rgba(190, 18, 60, 0.16); }
+:root[data-theme="light"] [data-mode="evening-wind-down"]    { --accent: #7e22ce; --accent-glow: rgba(126, 34, 206, 0.18); }
+:root[data-theme="light"] [data-mode="night"]                { --accent: #4338ca; --accent-glow: rgba(67, 56, 202, 0.18); }
+
+/* ============================================================
+   Typography, spacing, motion, layout — theme-agnostic.
+   ============================================================ */
+:root {
+  --font-sans:    "Inter", "Helvetica Neue", Arial, sans-serif;
+  --font-mono:    "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  --font-serif:   "Iowan Old Style", "Georgia", serif;
+
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-20: 20px;
+  --fs-24: 24px;
+  --fs-32: 32px;
+  --fs-48: 48px;
+
+  --lh-tight:  1.15;
+  --lh-normal: 1.5;
+  --lh-loose:  1.7;
+
+  --s-1:  4px;
+  --s-2:  8px;
+  --s-3:  12px;
+  --s-4:  16px;
+  --s-5:  24px;
+  --s-6:  32px;
+  --s-7:  48px;
+  --s-8:  64px;
+  --s-9:  96px;
+  --s-10: 128px;
+  --s-11: 160px;
+
+  --r-0:  0px;
+  --r-1:  2px;
+  --r-2:  4px;
+
+  --dur-instant:  60ms;
+  --dur-fast:     120ms;
+  --dur-normal:   200ms;
+  --ease:         cubic-bezier(0.2, 0, 0, 1);
+
+  --bw-1: 1px;
+  --bw-2: 2px;
+
+  /* Panel layout — chat fills the screen edge-to-edge. There is no
+     centered column. Stream and composer both use most of the
+     viewport, with a comfortable inner padding so text never touches
+     the edge. On very wide screens we cap content width so line
+     length stays readable. */
+  --header-height:    64px;
+  --composer-height:  72px;
+  --stream-max-w:     1400px;   /* soft cap on ultra-wide monitors */
+  --composer-max-w:   1200px;   /* input field cap — still wide, still fills the screen */
+  --page-side-pad:    32px;     /* page padding on wide viewports */
+  --page-side-pad-sm: 20px;     /* page padding on narrow viewports */
+  --msg-stack-gap:    28px;     /* space between chat messages */
+  --block-stack-gap:  16px;     /* space between blocks inside one assistant message */
+}
