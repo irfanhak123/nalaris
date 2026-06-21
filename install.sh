@@ -67,7 +67,7 @@ echo "  + vault templates"
 
 # 5. Create config.yaml
 CONFIG_FILE="$PROFILE_DIR/config.yaml"
-if [ ! -f "$CONFIG_FILE" ] || [ "$FORCE_OVERWRITE" = "1" ]; then
+if [ ! -f "$CONFIG_FILE" ]; then
   cat > "$CONFIG_FILE" << 'HEREDOC'
 # Nalaris — Hermes Profile Configuration
 # Edit this file with your API key and model settings.
