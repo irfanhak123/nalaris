@@ -1,95 +1,174 @@
-# Nalaris — Personal AI Assistant
+# Nalaris
 
-Nalaris is a personal assistant system built on [Hermes Agent](https://github.com/nousresearch/hermes-agent). It combines an always-on AI agent with a chat panel that renders rich interactive components — calendars, habit trackers, checklists, questions — directly in the conversation.
+> Personal assistant built on [Hermes Agent](https://hermes-agent.nousresearch.com/docs). Local-first AI for daily ops, scheduling, and quick captures.
 
-## What it does
-
-- **Always-on assistant** — runs every 30 minutes (7am–11pm), surfaces what matters, stays quiet when there's nothing to say
-- **Rich block UI** — 38 block types render inline in chat (calendar, habits, sliders, questions, tables, countdowns)
-- **Multiple profiles** — each user gets their own assistant with their own habits, goals, and preferences
-- **Guided onboarding** — first-run conversation collects your name, timezone, goals, and habits
-- **Reflective tone** — asks questions that help you think, not checklists that demand compliance
-
-## Quick start
+## Quick Start
 
 ```bash
-# 1. Install Hermes Agent
-# https://github.com/nousresearch/hermes-agent
+# 1. Install Hermes Agent (if not already installed)
+#    See: https://hermes-agent.nousresearch.com/docs
 
-# 2. Clone and install Nalaris
-git clone https://github.com/irfanhak123/nalaris.git
-cd nalaris
-chmod +x install.sh
-./install.sh
+# 2. Install Nalaris
+pip install -e .
 
-# 3. Edit config with your API key
-nano ~/.hermes/profiles/nalaris/config.yaml
+# 3. Check everything is set up
+nalaris-app doctor
 
-# 4. Start
-chmod +x start.sh
-./start.sh
-
-# 5. Open http://localhost:5173
+# 4. Start the app
+nalaris-app serve
+# -> http://localhost:8790
 ```
 
-On first launch, Nalaris guides you through onboarding — your name, timezone, goals, and starting habits. After that, it just works.
+If `nalaris-app` is not in your PATH, use:
+```bash
+python3 -m project_rumah.cli serve
+```
+
+That's it. One install, one command.
+
+## What You Get
+
+A single-process web app that gives you:
+
+- **AI chat** powered by Hermes Agent (streaming, tool use, memory)
+- **Rich block-based UI** — the agent renders interactive components inline (calendars, checklists, buttons, stats)
+- **Session persistence** — conversations survive restarts (SQLite)
+- **Cron integration** — the agent can post updates on a schedule
+
+## Configuration
+
+```bash
+# Show current config
+nalaris-app config
+
+# Set model and provider
+nalaris-app config set model mimo-v2.5-pro
+nalaris-app config set provider xiaomi
+
+# Set custom port
+nalaris-app config set port 9000
+
+# Config file: ~/.nalaris/config.json
+```
+
+Environment variables override config values:
+
+| Env Var | Config Key | Default |
+|---|---|---|
+| `RUMAH_MODEL` | `model` | `mimo-v2.5-pro` |
+| `RUMAH_PROVIDER` | `provider` | `xiaomi` |
+| `RUMAH_BASE_URL` | `base_url` | (empty) |
+| `RUMAH_PORT` | `port` | `8790` |
+| `RUMAH_HOST` | `host` | `0.0.0.0` |
+| `RUMAH_WORKSPACE` | `workspace` | `~/workspace` |
+| `RUMAH_DATA_DIR` | — | `~/.nalaris/data/` |
+| `RUMAH_HERMES_ROOT` | — | `~/.hermes/hermes-agent/` |
+
+## CLI Commands
+
+```
+nalaris-app serve              Start the app (gateway + panel on one port)
+nalaris-app serve --port 9000  Custom port
+nalaris-app config             Show current config
+nalaris-app config set KEY VAL Set a config value
+nalaris-app config get KEY     Get a config value
+nalaris-app doctor             Check if everything is set up correctly
+nalaris-app build-panel        Build panel and bundle static files
+```
+
+Alternative: `python3 -m project_rumah.cli <command>`
 
 ## Architecture
 
 ```
-User
-  |
-  v
-Panel (React SPA) <──> Hermes Gateway <──> LLM (any provider)
-  |                        |
-  |                  Nalaris Profile
-  |                  - personal-assistant skill (directive)
-  |                  - personal-assistant-chat-blocks skill
-  |                  - nalaris-onboarding skill
-  |                  - vault (habits, goals, journal)
-  |                  - cron (30-min ticks)
-  |
-  Block Renderer
-  (38 block types)
+Browser (:8790)
+    |
+    v
+Nalaris Gateway (Python stdlib HTTPServer)
+    |
+    +---> /              Serves panel (React, bundled as static files)
+    +---> /api/*         Chat, sessions, SSE streaming
+    +---> /panel-session Cron bridge (session ID handoff)
+    |
+    v
+Hermes Agent (AIAgent from run_agent.py)
+    |
+    +---> Tools, memory, skills, MCP
 ```
 
-**Hermes** provides the AI agent, gateway, session management, tool execution, and cron scheduling. **Nalaris** adds the panel UI, the personal-assistant skills, and the onboarding flow.
+One process. One port. No Node.js at runtime.
 
-## Block system
+## Development
 
-The agent emits `[[block:type:{json}]]` fences inline with prose. The panel parses these and renders rich interactive components:
+```bash
+# Clone and install in dev mode
+git clone https://github.com/irfanhak123/nalaris.git
+cd nalaris
+pip install -e ".[dev]"
 
-| Category | Blocks |
-|----------|--------|
-| **Content** | heading, quote, highlight, divider, code, image |
-| **Data** | stat, table, progress, countdown, heartbeat |
-| **Calendar** | calendar_row, calendar_day, agenda, timeline, deadline |
-| **Interactive** | question, button_row, slider, picker, checklist, habit |
-| **Layout** | columns, section, tabs |
-| **Status** | callout, greeting, one_thing, success, error |
+# Panel development (hot reload)
+cd panel
+npm install
+npm run dev          # -> http://localhost:5173 (proxies to gateway :8790)
 
-## Profiles
+# Gateway only (without bundled panel)
+RUMAH_STATIC_DIR=/dev/null nalaris-app serve
 
-Each profile is a Hermes profile at `~/.hermes/profiles/<name>/` with:
+# Build and bundle panel into the package
+nalaris-app build-panel
+# or manually:
+cd panel && npm run build
+cp -r dist/ ../src/project_rumah/static/
+```
 
-- `config.yaml` — model, API key, schedule
-- `skills/` — the Nalaris skills
-- `vault/` — user's personal data (habits, goals, journal)
-- `memories/` — agent's learned facts about the user
+## Project Structure
 
-The panel lets you switch between profiles. Creating a new profile triggers onboarding.
+```
+nalaris/
+├── pyproject.toml                          <- Package config, CLI entry points
+├── README.md                               <- You are here
+├── LICENSE                                 <- MIT
+├── install.sh                              <- Profile-based installer (alternative)
+├── panel/                                  <- React panel source (dev only)
+│   ├── package.json
+│   ├── vite.config.ts
+│   └── src/
+│       ├── App.tsx
+│       ├── components/blocks/              <- 38 block type renderers
+│       ├── lib/gateway.ts                  <- Gateway API client
+│       └── hooks/useChat.ts                <- Chat lifecycle
+├── src/project_rumah/
+│   ├── __init__.py
+│   ├── cli.py                              <- CLI entry point
+│   ├── static/                             <- Bundled panel build output
+│   ├── gateway/
+│   │   ├── __init__.py
+│   │   ├── server.py                       <- HTTP gateway (serves panel + API)
+│   │   ├── agent_bridge.py                 <- Hermes AIAgent bridge
+│   │   ├── session_store.py                <- SQLite session/message store
+│   │   ├── sse.py                          <- Server-Sent Events formatter
+│   │   └── paths.py                        <- Centralized path resolution
+│   ├── state.py                            <- Vault/calendar/memory state reader
+│   ├── compose.py                          <- Block composition rules
+│   ├── blocks.py                           <- Inline-block fence parser
+│   ├── chat.py                             <- Chat action normalization
+│   └── writes.py                           <- Vault write operations
+├── profile/                                <- Hermes profile template
+└── tests/
+    ├── test_chat.py
+    └── test_blocks.py
+```
 
-## Customization
+## The Block System
 
-- **Change the tone:** Edit `vault/Ops/agent-directive.md` in your profile
-- **Add habits:** Edit `vault/Ops/habits/catalog/daily-habits.md`
-- **Change schedule:** Edit the cron job in your profile config
-- **Change the model:** Edit `config.yaml` with any OpenAI-compatible provider
+The agent emits structured UI blocks inline with prose:
 
-## Contributing
+```
+[[block:calendar_row:{"time":"09:00","title":"Standup"}]]
+```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+The panel parses these fences mid-stream and renders interactive components. 38 block types are supported: calendar, checklists, buttons, sliders, tables, stats, and more.
 
 ## License
 
-[MIT](LICENSE)
+MIT

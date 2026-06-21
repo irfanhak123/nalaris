@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nalaris"
+version = "0.1.0"
+description = "Personal assistant built on Hermes Agent — local-first AI for daily ops, scheduling, and quick captures."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [
+    { name = "Muhammad Irfan Hakim" },
+]
+keywords = ["personal-assistant", "ai-agent", "hermes-agent", "local-first", "nalaris"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Home",
+]
+
+# Zero hard dependencies — the gateway uses stdlib only.
+# hermes-agent is discovered at runtime (soft dependency).
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.1.0",
+    "mypy>=1.7.0",
+]
+
+[project.scripts]
+nalaris-app = "project_rumah.cli:main"
+# Also accessible as: python -m project_rumah.cli
+# Note: 'nalaris' conflicts with Hermes profile shim, so we use 'nalaris-app'.
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Include bundled panel static files
+[tool.setuptools.package-data]
+"project_rumah" = ["static/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+warn_unused_ignores = true
