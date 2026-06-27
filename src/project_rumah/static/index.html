@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Project Rumah — Panel</title>
+    <script>
+      // ============================================================
+      // Flash-prevention: set <html data-theme> BEFORE first paint.
+      // Reads localStorage('rumah.theme'); falls back to 'auto'
+      // (resolves OS prefers-color-scheme). The React theme module
+      // takes over from here.
+      // ============================================================
+      (function () {
+        var STORAGE_KEY = 'rumah.theme';
+        function resolveAuto() {
+          if (!window.matchMedia) return 'dark';
+          return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        }
+        var stored = null;
+        try { stored = localStorage.getItem(STORAGE_KEY); } catch (_) {}
+        var mode = (stored === 'dark' || stored === 'light' || stored === 'auto') ? stored : 'auto';
+        var t = mode === 'auto' ? resolveAuto() : mode;
+        document.documentElement.setAttribute('data-theme', t);
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-BokmgoqJ.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BCh_kjnr.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

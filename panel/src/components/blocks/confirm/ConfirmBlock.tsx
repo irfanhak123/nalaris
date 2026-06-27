@@ -17,11 +17,11 @@ export function ConfirmBlock({ block }: { block: ServerBlock }) {
   if (!open) return null;
 
   const onConfirm = () => {
-    sendAction({ kind: d.confirm.kind, payload: d.confirm.payload, label: d.confirm.label });
+    sendAction({ kind: d.confirm.kind, payload: d.confirm.payload, label: d.confirm.label, block });
     setOpen(false);
   };
   const onCancel = () => {
-    if (d.cancel) sendAction({ kind: d.cancel.kind, payload: d.cancel.payload, label: d.cancel.label });
+    if (d.cancel) sendAction({ kind: d.cancel.kind, payload: d.cancel.payload, label: d.cancel.label, block });
     setOpen(false);
   };
 

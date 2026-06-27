@@ -6,7 +6,11 @@
  * messages are plain text. Assistant messages may have ui_blocks from
  * the stream parser or fences in content.
  *
- * Tool calls and thinking are collapsible, hidden by default.
+ * During a turn we show a compact activity overview (Claude-app style):
+ * a single status line + small chips for "Thinking" and each tool call.
+ * Once the response is final, that overview disappears and leaves a clean
+ * message. A subtle "Thinking / N tools" expander is shown only when the
+ * user wants to inspect the work that produced the answer.
  */
 
 import { useState } from 'react';
@@ -26,8 +30,6 @@ export function ChatMessage({ item }: { item: GatewayMessage }) {
   // Strip the [REMINDER:...] and [UI BLOCK FORMAT] prefixes that useChat
   // prepends to messages before sending to the LLM. These are instructions,
   // not user-visible content. Also strip [SILENT] markers.
-  // Use line-based stripping because the reminder contains nested brackets
-  // that break regex-based approaches.
   let content = item.content || '';
   const lines = content.split('\n');
   const cleaned: string[] = [];
@@ -61,7 +63,6 @@ export function ChatMessage({ item }: { item: GatewayMessage }) {
         </div>
       );
     }
-    // Cron message with blocks — render blocks as rich content.
     return (
       <div className="cm cm-assistant">
         {hasBlocks ? (
@@ -76,76 +77,111 @@ export function ChatMessage({ item }: { item: GatewayMessage }) {
 
   // Assistant messages
   const isStillStreaming = !!item.streaming;
+  const hasResponseBody = hasBlocks || hasCleanText || hasThinking || hasToolCalls;
 
   return (
     <div className="cm cm-assistant" data-streaming={isStillStreaming ? 'true' : undefined}>
-      {/* During streaming: show compact activity indicator instead of tool calls/thinking */}
-      {isStillStreaming && (hasToolCalls || hasThinking || (!hasBlocks && !hasCleanText)) ? (
-        <div className="cm-activity">
-          <span className="cm-dot" /><span className="cm-dot" /><span className="cm-dot" />
-          <span className="cm-activity-label">
-            {hasToolCalls ? `${item.tool_calls!.filter(c => c.pending).length || ''} working…` : 'thinking…'}
-          </span>
-        </div>
+      {/* Live turn overview: a clean activity line + chips, never a wall of text. */}
+      {isStillStreaming ? (
+        <StreamingOverview thinking={hasThinking} toolCalls={item.tool_calls ?? []} />
+      ) : hasThinking || hasToolCalls ? (
+        <ActivitySummary reasoning={item.reasoning} toolCalls={item.tool_calls ?? []} />
       ) : null}
-      {/* After done: show collapsible tool calls and thinking */}
-      {!isStillStreaming && hasToolCalls ? <ToolCallSection calls={item.tool_calls!} /> : null}
-      {!isStillStreaming && hasThinking ? <ThinkingSection reasoning={item.reasoning!} /> : null}
+
       {hasBlocks ? (
         <div className="cm-blocks">
           {allBlocks.map((block) => <BlockRenderer key={block.id} block={block} />)}
         </div>
       ) : null}
-      {shouldShowProse ? (
-        <RichContent content={cleanContent} />
-      ) : !hasBlocks && isStillStreaming ? (
-        <StreamingDots />
-      ) : null}
+
+      {shouldShowProse ? <RichContent content={cleanContent} /> : null}
+
+      {/* Never let a streaming assistant message render completely empty.
+          If no prose, blocks, thinking, or tools have arrived yet, show a
+          working indicator so the bubble stays visible. */}
+      {isStillStreaming && !hasResponseBody && !shouldShowProse ? <StreamingDots /> : null}
       {isStillStreaming && (shouldShowProse || hasBlocks) ? <StreamingDots inline /> : null}
     </div>
   );
 }
 
-function ThinkingSection({ reasoning }: { reasoning: string }) {
+/** Compact status row shown while the assistant is still working. */
+function StreamingOverview({ thinking, toolCalls }: { thinking: boolean; toolCalls: ToolCallRecord[] }) {
+  const pendingTools = toolCalls.filter((c) => c.pending);
+  const activeLabel =
+    pendingTools.length > 0
+      ? `Using ${pendingTools.length} tool${pendingTools.length > 1 ? 's' : ''}`
+      : toolCalls.length > 0
+        ? 'Finished tools'
+        : thinking
+          ? 'Thinking'
+          : 'Working';
+
+  return (
+    <div className="cm-overview">
+      <div className="cm-overview-main">
+        <span className="cm-overview-pulse" aria-hidden="true" />
+        <span className="cm-overview-label">{activeLabel}</span>
+      </div>
+      <div className="cm-overview-chips">
+        {thinking ? (
+          <span className="cm-chip cm-chip-thinking">
+            <span className="cm-chip-dot" />
+            Thinking
+          </span>
+        ) : null}
+        {toolCalls.map((call, i) => (
+          <span key={i} className={`cm-chip ${call.pending ? 'cm-chip-pending' : 'cm-chip-done'}`}>
+            {call.pending ? <span className="cm-chip-spinner" /> : <span className="cm-chip-check">✓</span>}
+            {call.name}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Minimal post-turn inspector. Default collapsed; keeps the final UI clean. */
+function ActivitySummary({ reasoning, toolCalls }: { reasoning?: string; toolCalls: ToolCallRecord[] }) {
   const [open, setOpen] = useState(false);
+  const hasThinking = !!reasoning && reasoning.trim().length > 0;
+  const parts: string[] = [];
+  if (hasThinking) parts.push('Thinking');
+  if (toolCalls.length > 0) parts.push(`${toolCalls.length} tool${toolCalls.length > 1 ? 's' : ''}`);
+  if (parts.length === 0) return null;
+
+  return (
+    <div className="cm-summary">
+      <button className="cm-summary-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className="cm-summary-icon">{open ? '▾' : '▸'}</span>
+        <span className="cm-summary-label">{parts.join(' · ')}</span>
+      </button>
+      {open ? (
+        <div className="cm-summary-body">
+          {hasThinking ? <ThinkingSection reasoning={reasoning!} /> : null}
+          {toolCalls.length > 0 ? <ToolCallSection calls={toolCalls} /> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ThinkingSection({ reasoning }: { reasoning: string }) {
   const preview = reasoning.trim().split('\n')[0].slice(0, 80);
   return (
     <div className="cm-thinking">
-      <button className="cm-thinking-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <span className="cm-thinking-icon">{open ? '▾' : '▸'}</span>
-        <span className="cm-thinking-label">thinking</span>
-        {!open && preview ? <span className="cm-thinking-preview">{preview}…</span> : null}
-      </button>
-      {open ? <div className="cm-thinking-body">{reasoning}</div> : null}
+      <div className="cm-thinking-preview-line">{preview}…</div>
+      <div className="cm-thinking-body">{reasoning}</div>
     </div>
   );
 }
 
 function ToolCallSection({ calls }: { calls: ToolCallRecord[] }) {
-  const [open, setOpen] = useState(false);
-  const pendingCount = calls.filter((c) => c.pending).length;
-  const doneCount = calls.length - pendingCount;
   return (
     <div className="cm-tools">
-      <button className="cm-tools-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <span className="cm-tools-icon">{open ? '▾' : '▸'}</span>
-        <span className="cm-tools-label">
-          {pendingCount > 0 ? (
-            <>
-              <span className="spinner" style={{ width: 10, height: 10 }} />
-              {pendingCount} tool{pendingCount > 1 ? 's' : ''} running
-              {doneCount > 0 ? ` · ${doneCount} done` : ''}
-            </>
-          ) : (
-            <>{calls.length} tool call{calls.length > 1 ? 's' : ''}</>
-          )}
-        </span>
-      </button>
-      {open ? (
-        <div className="cm-tools-body">
-          {calls.map((call, i) => <ToolCallItem key={i} call={call} />)}
-        </div>
-      ) : null}
+      <div className="cm-tools-body">
+        {calls.map((call, i) => <ToolCallItem key={i} call={call} />)}
+      </div>
     </div>
   );
 }

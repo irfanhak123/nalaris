@@ -63,6 +63,7 @@ interface SessionStoreState {
   setHydrated: (v: boolean) => void;
   markBlockAnswered: (blockId: string) => void;
   clearChat: () => Promise<void>;
+  resetForUserSwitch: () => void;
 }
 
 const STORAGE_KEY = 'panel-v2-session';
@@ -255,6 +256,28 @@ export const useSessionStore = create<SessionStoreState>()(
           set({ error: e instanceof Error ? e.message : String(e) });
         }
       },
+
+      /**
+       * Reset session state when switching users.
+       * Clears persisted session, messages, and draft so useChat
+       * creates a fresh session for the new user.
+       */
+      resetForUserSwitch: () => {
+        set({
+          session: null,
+          messages: [],
+          draft: '',
+          isStreaming: false,
+          activeStreamId: null,
+          error: null,
+          bootDone: false,
+          answeredBlockIds: [],
+        });
+        // Clear the session_id used by useChat's resolveSessionId.
+        // Do NOT remove the persist store key — that breaks zustand's
+        // onRehydrateStorage callback, leaving `hydrated` false forever.
+        localStorage.removeItem('nalaris-session-id');
+      },
     }),
     {
       name: STORAGE_KEY,
@@ -277,16 +300,39 @@ export function reconcileMessages(local: GatewayMessage[], server: GatewayMessag
   if (!local.length) return server.map((m) => ({ ...m, streaming: false, ...reExtractBlocks(m.content, m.ui_blocks) }));
 
   // Match server messages with local ones to preserve client metadata.
+  // Prefer matching by client_msg_id (optimistic bubbles) because the server
+  // may round timestamps differently, causing timestamp-only matching to miss.
   const matchedLocal = new Set<number>();
-  const result = server.map((sm) => {
-    const lmIdx = local.findIndex((m) => m.role === sm.role && Math.abs(m.timestamp - sm.timestamp) < 0.01);
-    const lm = lmIdx >= 0 ? local[lmIdx] : undefined;
-    if (lmIdx >= 0) matchedLocal.add(lmIdx);
-    if (lm && lm.client_msg_id && !sm.client_msg_id) {
-      return { ...sm, client_msg_id: lm.client_msg_id, streaming: false, ...reExtractBlocks(sm.content, lm.ui_blocks) };
-    }
-    return { ...sm, streaming: false, ...reExtractBlocks(sm.content, lm?.ui_blocks) };
-  });
+    const result = server.map((sm) => {
+      const lmIdx = local.findIndex((m) => {
+        if (m.client_msg_id && sm.client_msg_id) return m.client_msg_id === sm.client_msg_id;
+        return m.role === sm.role && Math.abs(m.timestamp - sm.timestamp) < 0.01;
+      });
+      const lm = lmIdx >= 0 ? local[lmIdx] : undefined;
+      if (lmIdx >= 0) matchedLocal.add(lmIdx);
+
+      const extracted = reExtractBlocks(sm.content, lm?.ui_blocks);
+      const merged: GatewayMessage = {
+        ...sm,
+        streaming: false,
+        ...extracted,
+      };
+
+      // Preserve local-only metadata the gateway does not store:
+      // reasoning and tool_calls were captured live from SSE. If the server
+      // copy lacks them, keep the local ones so the post-turn inspector still
+      // shows what the agent did during the turn.
+      if (!merged.reasoning?.trim() && lm?.reasoning?.trim()) {
+        merged.reasoning = lm.reasoning;
+      }
+      if ((!merged.tool_calls || merged.tool_calls.length === 0) && lm?.tool_calls && lm.tool_calls.length > 0) {
+        merged.tool_calls = lm.tool_calls;
+      }
+      if (lm?.client_msg_id && !merged.client_msg_id) {
+        merged.client_msg_id = lm.client_msg_id;
+      }
+      return merged;
+    });
 
   // Preserve local-only messages that the server hasn't returned yet:
   // 1. User messages with client_msg_id (optimistic, not yet persisted)
@@ -297,9 +343,12 @@ export function reconcileMessages(local: GatewayMessage[], server: GatewayMessag
     if (m.client_msg_id && m.role === 'user') {
       // Optimistic user message — server doesn't have it yet. Keep it.
       result.push({ ...m, streaming: false });
-    } else if (m.role === 'assistant' && m.streaming) {
-      // Actively streaming assistant — keep it alive.
-      result.push({ ...m, streaming: true });
+    } else if (m.role === 'assistant') {
+      // Local assistant message not yet on server — keep it.
+      // Covers the race where `done` fired (streaming=false) but the
+      // bridge hasn't stored the message yet. Without this, the message
+      // vanishes on the next reconcile.
+      result.push({ ...m, streaming: false });
     }
   }
 

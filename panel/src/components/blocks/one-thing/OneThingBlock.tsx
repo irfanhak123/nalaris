@@ -19,7 +19,7 @@ export function OneThingBlock({ block }: { block: ServerBlock }) {
 
   const save = async (value: string) => {
     if (isStreaming) return;
-    await sendAction({ kind: 'one_thing.set', payload: { text: value }, label: 'set one thing' });
+    await sendAction({ kind: 'one_thing.set', payload: { text: value }, label: 'set one thing', block });
   };
 
   if (editing) {

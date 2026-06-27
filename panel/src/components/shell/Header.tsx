@@ -1,17 +1,23 @@
 /**
- * Header — brand + clock + theme toggle + clear chat.
+ * Header — brand + clock + theme toggle + user switcher + clear chat.
  */
 
 import { useEffect, useState } from 'react';
 import { fmtTime, fmtDayShort } from '../../lib/utils';
 import { ThemeToggle } from './ThemeToggle';
+import { UserSwitcher } from '../user/UserSwitcher';
 import { useSessionStore } from '../../stores/sessionStore';
+import { useUserStore } from '../../stores/userStore';
 
-export function Header() {
+export function Header({ onAddUser, onSwitchToPicker }: {
+  onAddUser: () => void;
+  onSwitchToPicker: () => void;
+}) {
   const [now, setNow] = useState(() => new Date());
   const [confirming, setConfirming] = useState(false);
   const clearChat = useSessionStore((s) => s.clearChat);
   const messages = useSessionStore((s) => s.messages);
+  const activeUser = useUserStore((s) => s.activeUser);
 
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 30_000);
@@ -42,6 +48,12 @@ export function Header() {
         <span className="brand">Project Rumah</span>
         <span className="divider">·</span>
         <span className="when">{fmtDayShort(now)} {fmtTime(now)}</span>
+        {activeUser && (
+          <>
+            <span className="divider">·</span>
+            <span className="user-label">{activeUser.name}</span>
+          </>
+        )}
       </div>
       <div className="right">
         {canClear ? (
@@ -54,6 +66,12 @@ export function Header() {
           </button>
         ) : null}
         <ThemeToggle />
+        {activeUser && (
+          <UserSwitcher
+            onAddNew={onAddUser}
+            onSwitchToPicker={onSwitchToPicker}
+          />
+        )}
       </div>
     </header>
   );

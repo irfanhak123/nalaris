@@ -14,7 +14,6 @@ const LOAD_MORE_COUNT = 20;
 
 export function Stream() {
   const { messages, bootDone } = useChat();
-  const draft = useSessionStore((s) => s.draft);
   const isStreaming = useSessionStore((s) => s.isStreaming);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -73,15 +72,13 @@ export function Stream() {
               </div>
             ) : null}
             {visibleMessages.map((m, i) => (
-              <div key={`${m.role}-${m.timestamp}-${i}`} className="block-enter">
+              <div
+                key={m.client_msg_id || `${m.role}-${m.timestamp}-${i}`}
+                className="block-enter"
+              >
                 <ChatMessage item={m} />
               </div>
             ))}
-            {draft && draft.trim() ? (
-              <div className="cm cm-user">
-                <div className="cm-bubble">{draft}</div>
-              </div>
-            ) : null}
           </>
         )}
       </div>

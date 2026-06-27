@@ -28,6 +28,7 @@ import {
   type GatewaySession,
 } from '../lib/gateway';
 import { reconcileMessages, useSessionStore } from '../stores/sessionStore';
+import { useUserStore } from '../stores/userStore';
 import { feedStream, newStreamParser, finalizeStream } from '../lib/stream-blocks';
 
 const WORKSPACE = (import.meta.env.VITE_WORKSPACE as string | undefined) ?? 'workspace';
@@ -77,6 +78,8 @@ export function useChat() {
   const setBootDone = useSessionStore((s) => s.setBootDone);
 
   const abortRef = useRef<AbortController | null>(null);
+  // Guard against concurrent/double attachment to the same stream.
+  const consumingStreamRef = useRef<string | null>(null);
 
   // ---- 1. Boot: load or create the session ----
   //
@@ -91,7 +94,30 @@ export function useChat() {
     let cancelled = false;
     (async () => {
       try {
-        const sid = resolveSessionId();
+        const activeUser = useUserStore.getState().activeUser;
+
+        // If the user has existing sessions, load the most recent one.
+        // Only create a new session if the user has none.
+        let sid = '';
+        let isNewSession = false;
+        let foundUserSession = false;
+
+        if (activeUser?.user_id) {
+          try {
+            const { sessions: userSessions } = await gateway.getUserSessions(activeUser.user_id);
+            if (!cancelled && userSessions.length > 0) {
+              sid = userSessions[0].session_id;
+              localStorage.setItem(SESSION_STORAGE_KEY, sid);
+              foundUserSession = true;
+            }
+          } catch {
+            // non-fatal — fall through to resolveSessionId
+          }
+        }
+
+        if (!foundUserSession) {
+          sid = resolveSessionId();
+        }
 
         // Read the session. If it doesn't exist, create it once.
         let full: { session: GatewaySession };
@@ -102,7 +128,9 @@ export function useChat() {
             workspace: WORKSPACE,
             profile: PROFILE,
             title: 'nalaris',
+            user_id: activeUser?.user_id,
           });
+          isNewSession = true;
           if (cancelled) return;
           // Use the gateway's returned session ID (it may differ from our generated one)
           const realSid = created.session_id;
@@ -120,22 +148,63 @@ export function useChat() {
         setBootDone(true);
 
         // Persist session_id to the FastAPI server so the cron agent
-        // can post its output to this session (cron → panel bridge).
+        // can post its output to this session (cron -> panel bridge).
         try {
           await fetch('/panel-session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_id: sid }),
           });
-        } catch { /* non-fatal — cron bridge is best-effort */ }
+        } catch { /* non-fatal -- cron bridge is best-effort */ }
 
-        // 2. If the session is streaming, attach to the live stream.
-        const activeStreamId = full.session.active_stream_id;
-        if (activeStreamId) {
-          attachToStream(activeStreamId, sid).catch((e) => {
-            // eslint-disable-next-line no-console
-            console.warn('attach to existing stream failed:', e);
-          });
+        // If this is a brand new session with no messages, trigger a
+        // comprehensive onboarding conversation. The agent drives this
+        // with curiosity -- asking deep questions to understand the user.
+        let welcomeStreamId: string | null = null;
+        if (isNewSession && (!full.session.messages || full.session.messages.length === 0)) {
+          const userName = activeUser?.name || 'there';
+          const onboardingPrompt = `[ONBOARDING] New user "${userName}" just created their account. This is their first conversation.
+
+You are naturally curious about the people you work with. This is not a phase - it's who you are. Right now, you're meeting someone new, so curiosity takes the lead.
+
+Your goal: understand this person deeply enough to be genuinely useful. Not through an interview - through real conversation.
+
+CONVERSATION ARC (adapt naturally):
+1. Greet them by name. Ask what brought them here - what do they hope a personal assistant could help with?
+2. Their life right now - what does a typical day look like? Work, school, both?
+3. What they're working toward - goals, projects, things they care about. Ask WHY each one matters.
+4. Habits and routines - what do they already do? What do they want to start? What's been hard to stick with?
+5. What's hard right now - stress, time wasters, things they keep forgetting, friction in their day.
+6. How they like to communicate - short and direct or detailed? Proactive assistant or wait-to-be-asked?
+
+RULES:
+- ONE question per turn. Listen fully before moving on.
+- Follow up on interesting answers. If they mention a goal, dig into why. If they mention a struggle, ask what they've tried.
+- Use blocks to capture structured data (goals, habits, routines) so they see what you've learned.
+- After 4-6 exchanges, summarize what you know in a block and ask what's missing.
+- Be genuinely warm but not performative. Real curiosity, not a checklist.
+- No emoji. No em-dash. No curly quotes.
+- 2-4 sentences max per turn during onboarding.
+- This curiosity doesn't end after onboarding. You will always be learning about them - their feelings, thoughts, plans, struggles. Every conversation is data.`;
+
+          try {
+            const startResult = await gateway.startChat({
+              session_id: full.session.session_id,
+              message: onboardingPrompt,
+              workspace: WORKSPACE,
+              profile: PROFILE,
+            });
+            welcomeStreamId = startResult.stream_id;
+          } catch {
+            // non-fatal -- user can still chat manually
+          }
+        }
+
+        // 2. Publish any active/welcome stream id so the reactive attach
+        // effect below connects to the live SSE. If there was already an
+        // active stream, setActive() already copied it into the store.
+        if (welcomeStreamId) {
+          setStreamId(welcomeStreamId);
         }
       } catch (e) {
         if (cancelled) return;
@@ -148,7 +217,24 @@ export function useChat() {
       abortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated]);
+  }, [hydrated, bootDone]);
+
+  // ---- 2b. Auto-attach to any stream id that appears in the store ----
+  // Block actions (useBlockAction) start a turn and publish the stream id;
+  // this effect picks it up and consumes the response so dynamic blocks and
+  // agent replies actually render.
+  const activeStreamId = useSessionStore((s) => s.activeStreamId);
+
+  useEffect(() => {
+    const sid = useSessionStore.getState().session?.session_id;
+    if (!activeStreamId || !sid || isStreaming) return;
+    if (consumingStreamRef.current === activeStreamId) return;
+    attachToStream(activeStreamId, sid).catch((e) => {
+      // eslint-disable-next-line no-console
+      console.warn('attach to stream failed:', e);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeStreamId, isStreaming]);
 
   // ---- 3. Poll for cron ticks ----
 
@@ -167,6 +253,61 @@ export function useChat() {
     }, POLL_INTERVAL_MS);
     return () => clearInterval(id);
   }, [bootDone, setMessages]);
+
+  // ---- 3b. Recover from a stream that finished without telling us ----
+  // The SSE connection can go idle or the tab can sleep. If the store
+  // still thinks we're streaming but the gateway's session has no active
+  // stream, reconcile so the final message appears without a manual refresh.
+
+  useEffect(() => {
+    if (!bootDone) return;
+    const sid = useSessionStore.getState().session?.session_id;
+    if (!sid) return;
+    const id = setInterval(async () => {
+      if (!useSessionStore.getState().isStreaming) return;
+      try {
+        const full = await gateway.readSession(sid);
+        if (!full.session.is_streaming) {
+          // Server says nothing is streaming — force reconcile and reset flags.
+          setStreaming(false);
+          setStreamId(null);
+          setMessages(reconcileMessages(useSessionStore.getState().messages, full.session.messages ?? []));
+        }
+      } catch {
+        // non-fatal
+      }
+    }, 10_000);
+    return () => clearInterval(id);
+  }, [bootDone, setMessages, setStreaming, setStreamId]);
+
+  // ---- 3c. Visibility fallback ----
+  // When the user returns to the tab, immediately reconcile if we believe
+  // a stream is active. Catches cases where the browser throttled SSE while
+  // hidden and the `done` event never fired locally.
+
+  useEffect(() => {
+    if (!bootDone) return;
+    const sid = useSessionStore.getState().session?.session_id;
+    if (!sid) return;
+
+    const onVisible = async () => {
+      if (!document.hidden && useSessionStore.getState().isStreaming) {
+        try {
+          const full = await gateway.readSession(sid);
+          if (!full.session.is_streaming) {
+            setStreaming(false);
+            setStreamId(null);
+          }
+          setMessages(reconcileMessages(useSessionStore.getState().messages, full.session.messages ?? []));
+        } catch {
+          // non-fatal
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [bootDone, setMessages, setStreaming, setStreamId]);
 
   // ---- 4. Send a message ----
   //
@@ -221,6 +362,7 @@ export function useChat() {
           message: messageForLlm,
           workspace: WORKSPACE,
           profile: PROFILE,
+          client_msg_id: clientMsgId,
         });
         streamId = start.stream_id;
       } catch (e) {
@@ -238,18 +380,50 @@ export function useChat() {
         return;
       }
 
+      // Mark streaming immediately so the UI shows activity and the poller
+      // knows a turn is in flight. If consumeStream later hangs, the watchdog
+      // and visibility handling can recover.
+      setStreaming(true);
+      setStreamId(streamId);
+
       await consumeStream(streamId, sid);
     },
-    [appendLocalMessage, setDraft, setError],
+    [appendLocalMessage, setDraft, setError, setStreaming, setStreamId],
   );
 
   // ---- Stream consumer ----
 
   const consumeStream = useCallback(
     async (streamId: string, sid: string) => {
+      if (consumingStreamRef.current === streamId) return;
+      consumingStreamRef.current = streamId;
       const ctrl = new AbortController();
       abortRef.current = ctrl;
       const parser = newStreamParser();
+
+      // Watchdogs: if the SSE goes silent for too long, abort so the finally
+      // block reconciles with the server. This prevents the UI from appearing
+      // to hang when the gateway connection stalls but the turn is done.
+      // Tool-heavy agent turns can be quiet for a while, so the idle timeout
+      // is generous; any SSE event (token, reasoning, tool, metering) resets it.
+      const WATCHDOG_MS = 120_000;
+      const HARD_CAP_MS = 10 * 60_000;
+      let watchdog: ReturnType<typeof setTimeout> | null = null;
+      const resetWatchdog = () => {
+        if (watchdog) clearTimeout(watchdog);
+        watchdog = setTimeout(() => {
+          // Only abort if we are still the active stream.
+          if (useSessionStore.getState().activeStreamId === streamId) {
+            ctrl.abort();
+          }
+        }, WATCHDOG_MS);
+      };
+      const hardTimeout = setTimeout(() => {
+        if (useSessionStore.getState().activeStreamId === streamId) {
+          ctrl.abort();
+        }
+      }, HARD_CAP_MS);
+      resetWatchdog();
 
       // Ensure an assistant placeholder exists so token/reasoning/tool handlers
       // can patch it. Without this, the first token finds the user message as
@@ -268,6 +442,7 @@ export function useChat() {
           throw new Error(`stream ${res.status}: ${await res.text()}`);
         }
         for await (const ev of parseSse(res)) {
+          resetWatchdog();
           if (ev.type === 'token') {
             const chunk = ev.data.text ?? '';
             // Feed through the block parser; the parser strips fences
@@ -332,9 +507,12 @@ export function useChat() {
         }
         updateMessage((m) => m.role === 'assistant' && !!m.streaming, { streaming: false });
       } finally {
+        if (watchdog) clearTimeout(watchdog);
+        clearTimeout(hardTimeout);
         setStreaming(false);
         setStreamId(null);
         abortRef.current = null;
+        consumingStreamRef.current = null;
         // Reconcile with the server.
         try {
           const full = await gateway.readSession(sid);
@@ -354,6 +532,7 @@ export function useChat() {
 
   const attachToStream = useCallback(
     async (streamId: string, sid: string) => {
+      if (consumingStreamRef.current === streamId) return;
       setStreamId(streamId);
       setStreaming(true);
       const allMsgs = useSessionStore.getState().messages;
@@ -365,6 +544,7 @@ export function useChat() {
     },
     [appendToken, setStreamId, setStreaming, consumeStream],
   );
+
 
   // ---- 5. Cancel ----
 

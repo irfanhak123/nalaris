@@ -59,6 +59,7 @@ export interface GatewayMessage {
 
 export interface GatewaySession {
   session_id: string;
+  user_id?: string;
   title: string;
   manual_title?: boolean;
   workspace: string;
@@ -78,6 +79,17 @@ export interface GatewaySession {
   messages?: GatewayMessage[];
   _messages_offset?: number;
   _messages_truncated?: boolean;
+}
+
+export interface GatewayUser {
+  user_id: string;
+  name: string;
+  avatar_color: string;
+  avatar_emoji?: string;
+  onboarded: boolean;
+  preferences: Record<string, unknown>;
+  created_at: number;
+  updated_at: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -145,16 +157,49 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 export const gateway = {
   baseUrl: BASE,
 
+  // ── User API ──
+
+  /** List all users. */
+  listUsers: () =>
+    get<{ users: GatewayUser[] }>('/api/users'),
+
+  /** Create a new user. */
+  createUser: (req: { name: string; avatar_color?: string; avatar_emoji?: string; preferences?: Record<string, unknown> }) =>
+    post<{ user: GatewayUser }>('/api/users', req),
+
+  /** Get a single user. */
+  getUser: (userId: string) =>
+    get<{ user: GatewayUser }>(`/api/users/${encodeURIComponent(userId)}`),
+
+  /** Update a user. */
+  updateUser: (userId: string, fields: Partial<Pick<GatewayUser, 'name' | 'avatar_color' | 'avatar_emoji' | 'onboarded' | 'preferences'>>) =>
+    post<{ user: GatewayUser }>(`/api/users/${encodeURIComponent(userId)}`, fields),
+
+  /** Mark user as onboarded. */
+  markOnboarded: (userId: string) =>
+    post<{ user: GatewayUser }>(`/api/users/${encodeURIComponent(userId)}/onboard`),
+
+  /** Delete a user and all their sessions. */
+  deleteUser: (userId: string) =>
+    post<{ ok: boolean }>(`/api/users/${encodeURIComponent(userId)}/delete`),
+
+  /** Get sessions for a specific user. */
+  getUserSessions: (userId: string) =>
+    get<{ sessions: GatewaySession[] }>(`/api/users/${encodeURIComponent(userId)}/sessions`),
+
+  // ── Session API ──
+
   /** Read a session with full message history. */
   readSession: (sid: string) =>
     get<{ session: GatewaySession }>(`/api/session?session_id=${encodeURIComponent(sid)}&messages=1`),
 
   /** Create a new empty session. */
-  newSession: (init: { workspace: string; profile?: string; title?: string }) =>
+  newSession: (init: { workspace: string; profile?: string; title?: string; user_id?: string }) =>
     post<{ session: GatewaySession }>('/api/session/new', {
       workspace: init.workspace,
       profile: init.profile ?? 'default',
       title: init.title,
+      user_id: init.user_id,
     }),
 
   /** Persist a composer draft (debounced on the client). */
@@ -172,6 +217,7 @@ export const gateway = {
     message: string;
     workspace?: string;
     profile?: string;
+    client_msg_id?: string;
   }) =>
     post<{
       stream_id: string;

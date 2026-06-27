@@ -228,12 +228,19 @@ export function useBlockAction() {
         client_msg_id: clientMsgId,
       });
 
-      await gateway.startChat({
+      const startResult = await gateway.startChat({
         session_id: sid,
         message: agentMessage,
         workspace: (import.meta.env.VITE_WORKSPACE as string | undefined) ?? 'workspace',
         profile: (import.meta.env.VITE_PROFILE as string | undefined) ?? 'default',
+        client_msg_id: clientMsgId,
       });
+
+      // Publish the stream id so useChat's reactive attach effect will
+      // consume the agent response. Without this, block actions fire but
+      // the resulting dynamic blocks / reply are never rendered.
+      useSessionStore.getState().setStreamId(startResult.stream_id);
+      useSessionStore.getState().setStreaming(true);
 
       clearPolls();
       schedulePoll(sid, 2000);
@@ -262,6 +269,9 @@ export function useBlockAction() {
       }
 
       return { ok: false, error: msg };
+    } finally {
+      // Ensure any queued action is attempted once the stream we started finishes.
+      // The reactive attach effect in useChat drives streaming state.
     }
   }, [schedulePoll, clearPolls]);
 
