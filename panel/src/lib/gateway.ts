@@ -107,6 +107,7 @@ export type StreamEvent =
   | { type: 'tool_complete'; data: { name?: string; result?: unknown } }
   | { type: 'done'; data: Record<string, unknown> }
   | { type: 'stream_end'; data: { run_id?: string; status?: string } }
+  | { type: 'alignment'; data: { alignment?: Record<string, unknown> } }
   | { type: 'error'; data: { error: string } };
 
 // ---------------------------------------------------------------------------
@@ -158,6 +159,10 @@ export const gateway = {
   baseUrl: BASE,
 
   // ── User API ──
+
+  /** The single user (with alignment findings). */
+  getMe: () =>
+    get<{ user: GatewayUser }>('/api/me'),
 
   /** List all users. */
   listUsers: () =>
@@ -235,6 +240,15 @@ export const gateway = {
   /** Cancel an in-flight stream. Best-effort: 404 is fine (stream already done). */
   cancelChat: (streamId: string) =>
     post<{ ok: boolean }>('/api/chat/cancel', { stream_id: streamId }),
+
+  /** Start an on-demand alignment conversation in an existing session.
+   *  The agent opens with its first question; no synthetic user bubble. */
+  startAlignment: (sessionId: string) =>
+    post<{ stream_id: string; session_id: string; turn_id?: string; alignment?: boolean }>('/api/align', {
+      session_id: sessionId,
+      workspace: (import.meta.env.VITE_WORKSPACE as string | undefined) ?? 'workspace',
+      profile: (import.meta.env.VITE_PROFILE as string | undefined) ?? 'default',
+    }),
 };
 
 // ---------------------------------------------------------------------------

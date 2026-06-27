@@ -1,70 +1,36 @@
 /**
  * App — Nalaris personal assistant panel.
  *
- * User management flow:
- *   1. Fetch users from gateway
- *   2. No users -> UserOnboarding (first launch)
- *   3. Users exist, no active -> UserPicker
- *   4. Active user, not onboarded -> UserOnboarding
- *   5. Active user, onboarded -> main chat UI
+ * Single-user. Boot:
+ *   1. Fetch the single user (GET /api/me).
+ *   2. Show a loading brand while waiting.
+ *   3. Show the main chat UI. Alignment (onboarding) is NOT a static form
+ *      here — it is an agent-driven conversation the user can trigger any
+ *      time from the header, and which auto-fires on first launch from
+ *      useChat once the session is ready.
  *
  * ?demo=1 — injects sample blocks (no gateway needed).
  */
 
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { Stream } from './components/stream/Stream';
 import { ChatInput } from './components/chat/ChatInput';
 import { Header } from './components/shell/Header';
-import { UserOnboarding } from './components/user/UserOnboarding';
-import { UserPicker } from './components/user/UserPicker';
 import { useTheme, useAutoFollow } from './lib/theme';
 import { useSessionStore } from './stores/sessionStore';
 import { useUserStore } from './stores/userStore';
 import { demoBlocks } from './lib/demo-blocks';
 
-type Screen = 'loading' | 'onboarding' | 'picker' | 'chat' | 'add-user';
-
 export default function App() {
   const [mode] = useTheme();
   useAutoFollow(mode);
-  const [screen, setScreen] = useState<Screen>('loading');
 
-  const { users, activeUser, usersLoaded, fetchUsers, setActiveUser } = useUserStore();
-  const resetForUserSwitch = useSessionStore((s) => s.resetForUserSwitch);
+  const { loaded, fetchMe } = useUserStore();
 
-  // Boot: fetch users on mount
+  // Boot: fetch the single user on mount
   useEffect(() => {
-    fetchUsers();
-  }, [fetchUsers]);
-
-  // Determine screen based on state
-  useEffect(() => {
-    if (!usersLoaded) {
-      setScreen('loading');
-      return;
-    }
-
-    if (users.length === 0) {
-      // No users exist -> first-time onboarding
-      setScreen('onboarding');
-      return;
-    }
-
-    if (!activeUser) {
-      // Users exist but none selected -> picker
-      setScreen('picker');
-      return;
-    }
-
-    if (!activeUser.onboarded) {
-      // Active user needs onboarding
-      setScreen('onboarding');
-      return;
-    }
-
-    // All good -> show chat
-    setScreen('chat');
-  }, [usersLoaded, users, activeUser]);
+    fetchMe();
+  }, [fetchMe]);
 
   // Demo mode: inject sample blocks after boot
   const bootDone = useSessionStore((s) => s.bootDone);
@@ -89,36 +55,8 @@ export default function App() {
     setMessages([...messages, demoMsg]);
   }, [bootDone, messages, setMessages]);
 
-  // Handler: user completed onboarding
-  const handleOnboardingComplete = () => {
-    fetchUsers();
-  };
-
-  // Handler: select user from picker
-  const handleSelectUser = (userId: string) => {
-    const user = users.find(u => u.user_id === userId);
-    if (user) {
-      // Reset session so useChat creates a fresh one for this user
-      resetForUserSwitch();
-      setActiveUser(user);
-    }
-  };
-
-  // Handler: switch user from header
-  const handleSwitchToPicker = () => {
-    resetForUserSwitch();
-    setActiveUser(null);
-    setScreen('picker');
-  };
-
-  // Handler: add new user from header
-  const handleAddUser = () => {
-    resetForUserSwitch();
-    setScreen('add-user');
-  };
-
-  // Loading state
-  if (screen === 'loading') {
+  // Loading state (user fetch in flight)
+  if (!loaded) {
     return (
       <div className="onboarding">
         <div className="onboarding-card">
@@ -134,37 +72,10 @@ export default function App() {
     );
   }
 
-  // Onboarding (first launch or new user)
-  if (screen === 'onboarding') {
-    return (
-      <UserOnboarding onComplete={handleOnboardingComplete} />
-    );
-  }
-
-  // User picker
-  if (screen === 'picker') {
-    return (
-      <UserPicker
-        onSelect={handleSelectUser}
-        onAddNew={() => setScreen('add-user')}
-      />
-    );
-  }
-
-  // Add new user (from picker or switcher)
-  if (screen === 'add-user') {
-    return (
-      <UserOnboarding onComplete={handleOnboardingComplete} />
-    );
-  }
-
-  // Main chat UI
+  // Main chat UI (single-user — no picker, no onboarding form)
   return (
     <div className="app-shell">
-      <Header
-        onAddUser={handleAddUser}
-        onSwitchToPicker={handleSwitchToPicker}
-      />
+      <Header />
       <main className="main">
         <Stream />
         <ChatInput />

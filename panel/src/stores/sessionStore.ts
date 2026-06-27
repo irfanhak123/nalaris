@@ -64,6 +64,10 @@ interface SessionStoreState {
   markBlockAnswered: (blockId: string) => void;
   clearChat: () => Promise<void>;
   resetForUserSwitch: () => void;
+  /** Monotonic counter bumped to request an on-demand alignment turn.
+   *  useChat watches this and starts the alignment conversation. */
+  alignToken: number;
+  requestAlignment: () => void;
 }
 
 const STORAGE_KEY = 'panel-v2-session';
@@ -79,6 +83,7 @@ export const useSessionStore = create<SessionStoreState>()(
       hydrated: false,
       bootDone: false,
       answeredBlockIds: [],
+      alignToken: 0,
 
       setActive: (session) => {
         set({
@@ -278,6 +283,12 @@ export const useSessionStore = create<SessionStoreState>()(
         // onRehydrateStorage callback, leaving `hydrated` false forever.
         localStorage.removeItem('nalaris-session-id');
       },
+
+      requestAlignment: () => {
+        const cur = get();
+        if (cur.isStreaming) return; // a turn is in flight — ignore
+        set({ alignToken: cur.alignToken + 1 });
+      },
     }),
     {
       name: STORAGE_KEY,
@@ -300,13 +311,21 @@ export function reconcileMessages(local: GatewayMessage[], server: GatewayMessag
   if (!local.length) return server.map((m) => ({ ...m, streaming: false, ...reExtractBlocks(m.content, m.ui_blocks) }));
 
   // Match server messages with local ones to preserve client metadata.
-  // Prefer matching by client_msg_id (optimistic bubbles) because the server
-  // may round timestamps differently, causing timestamp-only matching to miss.
+  // Prefer matching by client_msg_id (optimistic bubbles). Otherwise pair
+  // POSITIONALLY by role: the next unmatched local message of the same role
+  // corresponds to this server message. This dedups both user bubbles
+  // (optimistic vs persisted) and assistant bubbles (live-streamed vs
+  // persisted) without relying on timestamp equality (fragile across
+  // client/server clocks — the local assistant was created at stream start,
+  // the server's at persistence, so they differ by the whole turn duration)
+  // or content equality (fragile because the local copy is fence-stripped
+  // while the server stores raw output).
   const matchedLocal = new Set<number>();
     const result = server.map((sm) => {
-      const lmIdx = local.findIndex((m) => {
+      const lmIdx = local.findIndex((m, i) => {
+        if (matchedLocal.has(i)) return false;
         if (m.client_msg_id && sm.client_msg_id) return m.client_msg_id === sm.client_msg_id;
-        return m.role === sm.role && Math.abs(m.timestamp - sm.timestamp) < 0.01;
+        return m.role === sm.role;
       });
       const lm = lmIdx >= 0 ? local[lmIdx] : undefined;
       if (lmIdx >= 0) matchedLocal.add(lmIdx);
@@ -336,19 +355,27 @@ export function reconcileMessages(local: GatewayMessage[], server: GatewayMessag
 
   // Preserve local-only messages that the server hasn't returned yet:
   // 1. User messages with client_msg_id (optimistic, not yet persisted)
-  // 2. Streaming assistant messages (actively being built)
+  // 2. Assistant messages that are STILL streaming (in-flight turn)
+  //
+  // A non-streaming local assistant with no server counterpart is stale —
+  // typically a duplicate left in localStorage from an earlier buggy run.
+  // The bridge now persists the assistant before emitting `done`, so by the
+  // time a reconcile runs after a turn, the server has the message and it
+  // pairs positionally above. Keeping stale non-streaming assistants here
+  // would immortalize duplicates, so we drop them.
   for (let i = 0; i < local.length; i++) {
     if (matchedLocal.has(i)) continue;
     const m = local[i];
     if (m.client_msg_id && m.role === 'user') {
-      // Optimistic user message — server doesn't have it yet. Keep it.
-      result.push({ ...m, streaming: false });
-    } else if (m.role === 'assistant') {
-      // Local assistant message not yet on server — keep it.
-      // Covers the race where `done` fired (streaming=false) but the
-      // bridge hasn't stored the message yet. Without this, the message
-      // vanishes on the next reconcile.
-      result.push({ ...m, streaming: false });
+      // Optimistic user message — keep it only if it's recent enough that the
+      // server may simply not have persisted it yet. An old optimistic user
+      // with no server counterpart is an abandoned send from a past run;
+      // keeping it would immortalize a duplicate user bubble.
+      const ageSec = Date.now() / 1000 - (m.timestamp ?? 0);
+      if (ageSec < 60) result.push({ ...m, streaming: false });
+    } else if (m.role === 'assistant' && m.streaming) {
+      // Genuinely in-flight assistant turn — keep it until the server has it.
+      result.push({ ...m });
     }
   }
 

@@ -852,6 +852,16 @@ ul.checklist .label { font-size: var(--fs-14); }
   gap: var(--s-2);
 }
 
+.cm-overview-reasoning {
+  font-size: var(--fs-12);
+  color: var(--gray-4);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+
 .cm-chip {
   display: inline-flex;
   align-items: center;

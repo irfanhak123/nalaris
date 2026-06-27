@@ -1,23 +1,26 @@
 /**
- * Header — brand + clock + theme toggle + user switcher + clear chat.
+ * Header — brand + clock + theme toggle + re-align + clear chat.
+ *
+ * Single-user: no user switcher. "Re-align" triggers an on-demand
+ * alignment conversation (the agent re-learns the user's goals, habits,
+ * and current situation). requestAlignment() bumps a token the useChat
+ * hook watches to start the turn.
  */
 
 import { useEffect, useState } from 'react';
 import { fmtTime, fmtDayShort } from '../../lib/utils';
 import { ThemeToggle } from './ThemeToggle';
-import { UserSwitcher } from '../user/UserSwitcher';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useUserStore } from '../../stores/userStore';
 
-export function Header({ onAddUser, onSwitchToPicker }: {
-  onAddUser: () => void;
-  onSwitchToPicker: () => void;
-}) {
+export function Header() {
   const [now, setNow] = useState(() => new Date());
   const [confirming, setConfirming] = useState(false);
   const clearChat = useSessionStore((s) => s.clearChat);
+  const requestAlignment = useSessionStore((s) => s.requestAlignment);
+  const isStreaming = useSessionStore((s) => s.isStreaming);
   const messages = useSessionStore((s) => s.messages);
-  const activeUser = useUserStore((s) => s.activeUser);
+  const me = useUserStore((s) => s.me);
 
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 30_000);
@@ -48,14 +51,22 @@ export function Header({ onAddUser, onSwitchToPicker }: {
         <span className="brand">Project Rumah</span>
         <span className="divider">·</span>
         <span className="when">{fmtDayShort(now)} {fmtTime(now)}</span>
-        {activeUser && (
+        {me?.name && (
           <>
             <span className="divider">·</span>
-            <span className="user-label">{activeUser.name}</span>
+            <span className="user-label">{me.name}</span>
           </>
         )}
       </div>
       <div className="right">
+        <button
+          className="realign-btn"
+          onClick={requestAlignment}
+          disabled={isStreaming}
+          title="Re-run alignment: let the agent re-learn your goals, habits, and what's going on"
+        >
+          re-align
+        </button>
         {canClear ? (
           <button
             className={`clear-btn${confirming ? ' confirming' : ''}`}
@@ -66,12 +77,6 @@ export function Header({ onAddUser, onSwitchToPicker }: {
           </button>
         ) : null}
         <ThemeToggle />
-        {activeUser && (
-          <UserSwitcher
-            onAddNew={onAddUser}
-            onSwitchToPicker={onSwitchToPicker}
-          />
-        )}
       </div>
     </header>
   );

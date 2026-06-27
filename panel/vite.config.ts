@@ -37,6 +37,7 @@ export default defineConfig(({ mode }) => {
             });
           },
         },
+
         // FastAPI harness — state, blocks, write actions, panel-session bridge.
         '/state': API,
         '/blocks': API,

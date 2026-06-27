@@ -61,6 +61,7 @@ export function useChat() {
   const error = useSessionStore((s) => s.error);
   const bootDone = useSessionStore((s) => s.bootDone);
   const hydrated = useSessionStore((s) => s.hydrated);
+  const meLoaded = useUserStore((s) => s.loaded);
 
   const setActive = useSessionStore((s) => s.setActive);
   const setMessages = useSessionStore((s) => s.setMessages);
@@ -90,11 +91,12 @@ export function useChat() {
   useEffect(() => {
     if (!hydrated) return;
     if (bootDone) return;
+    if (!meLoaded) return; // wait for the single user to load first
 
     let cancelled = false;
     (async () => {
       try {
-        const activeUser = useUserStore.getState().activeUser;
+        const me = useUserStore.getState().me;
 
         // If the user has existing sessions, load the most recent one.
         // Only create a new session if the user has none.
@@ -102,9 +104,9 @@ export function useChat() {
         let isNewSession = false;
         let foundUserSession = false;
 
-        if (activeUser?.user_id) {
+        if (me?.user_id) {
           try {
-            const { sessions: userSessions } = await gateway.getUserSessions(activeUser.user_id);
+            const { sessions: userSessions } = await gateway.getUserSessions(me.user_id);
             if (!cancelled && userSessions.length > 0) {
               sid = userSessions[0].session_id;
               localStorage.setItem(SESSION_STORAGE_KEY, sid);
@@ -128,7 +130,7 @@ export function useChat() {
             workspace: WORKSPACE,
             profile: PROFILE,
             title: 'nalaris',
-            user_id: activeUser?.user_id,
+            user_id: me?.user_id,
           });
           isNewSession = true;
           if (cancelled) return;
@@ -157,43 +159,15 @@ export function useChat() {
           });
         } catch { /* non-fatal -- cron bridge is best-effort */ }
 
-        // If this is a brand new session with no messages, trigger a
-        // comprehensive onboarding conversation. The agent drives this
-        // with curiosity -- asking deep questions to understand the user.
+        // If this is a brand new session with no messages, auto-trigger an
+        // alignment conversation. Onboarding is NOT a static form — it is
+        // an agent-driven conversation that discovers what the user wants
+        // to achieve, habits they want to build, and what's going on. The
+        // user can re-trigger it any time from the header (requestAlignment).
         let welcomeStreamId: string | null = null;
         if (isNewSession && (!full.session.messages || full.session.messages.length === 0)) {
-          const userName = activeUser?.name || 'there';
-          const onboardingPrompt = `[ONBOARDING] New user "${userName}" just created their account. This is their first conversation.
-
-You are naturally curious about the people you work with. This is not a phase - it's who you are. Right now, you're meeting someone new, so curiosity takes the lead.
-
-Your goal: understand this person deeply enough to be genuinely useful. Not through an interview - through real conversation.
-
-CONVERSATION ARC (adapt naturally):
-1. Greet them by name. Ask what brought them here - what do they hope a personal assistant could help with?
-2. Their life right now - what does a typical day look like? Work, school, both?
-3. What they're working toward - goals, projects, things they care about. Ask WHY each one matters.
-4. Habits and routines - what do they already do? What do they want to start? What's been hard to stick with?
-5. What's hard right now - stress, time wasters, things they keep forgetting, friction in their day.
-6. How they like to communicate - short and direct or detailed? Proactive assistant or wait-to-be-asked?
-
-RULES:
-- ONE question per turn. Listen fully before moving on.
-- Follow up on interesting answers. If they mention a goal, dig into why. If they mention a struggle, ask what they've tried.
-- Use blocks to capture structured data (goals, habits, routines) so they see what you've learned.
-- After 4-6 exchanges, summarize what you know in a block and ask what's missing.
-- Be genuinely warm but not performative. Real curiosity, not a checklist.
-- No emoji. No em-dash. No curly quotes.
-- 2-4 sentences max per turn during onboarding.
-- This curiosity doesn't end after onboarding. You will always be learning about them - their feelings, thoughts, plans, struggles. Every conversation is data.`;
-
           try {
-            const startResult = await gateway.startChat({
-              session_id: full.session.session_id,
-              message: onboardingPrompt,
-              workspace: WORKSPACE,
-              profile: PROFILE,
-            });
+            const startResult = await gateway.startAlignment(full.session.session_id);
             welcomeStreamId = startResult.stream_id;
           } catch {
             // non-fatal -- user can still chat manually
@@ -217,7 +191,7 @@ RULES:
       abortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated, bootDone]);
+  }, [hydrated, bootDone, meLoaded]);
 
   // ---- 2b. Auto-attach to any stream id that appears in the store ----
   // Block actions (useBlockAction) start a turn and publish the stream id;
@@ -265,10 +239,15 @@ RULES:
     if (!sid) return;
     const id = setInterval(async () => {
       if (!useSessionStore.getState().isStreaming) return;
+      // An SSE consumer is actively attached — let its own `finally` block
+      // reconcile. Stomping here would freeze the in-flight bubble.
+      if (consumingStreamRef.current) return;
       try {
         const full = await gateway.readSession(sid);
-        if (!full.session.is_streaming) {
-          // Server says nothing is streaming — force reconcile and reset flags.
+        // Only recover when the server EXPLICITLY says the turn is done.
+        // `is_streaming` is undefined for backends that don't report it;
+        // treat that as "unknown, don't touch" instead of "done".
+        if (full.session.is_streaming === false) {
           setStreaming(false);
           setStreamId(null);
           setMessages(reconcileMessages(useSessionStore.getState().messages, full.session.messages ?? []));
@@ -294,11 +273,14 @@ RULES:
       if (!document.hidden && useSessionStore.getState().isStreaming) {
         try {
           const full = await gateway.readSession(sid);
-          if (!full.session.is_streaming) {
+          // Only act when the server explicitly says the turn is done.
+          // If it's still streaming, the SSE connection resumes on visible —
+          // reconciling now would freeze the in-flight assistant bubble.
+          if (full.session.is_streaming === false) {
             setStreaming(false);
             setStreamId(null);
+            setMessages(reconcileMessages(useSessionStore.getState().messages, full.session.messages ?? []));
           }
-          setMessages(reconcileMessages(useSessionStore.getState().messages, full.session.messages ?? []));
         } catch {
           // non-fatal
         }
@@ -323,6 +305,11 @@ RULES:
 
       // Read the freshest state at call time.
       const cur = useSessionStore.getState();
+      if (cur.isStreaming) {
+        // A turn is already in flight — block the double-send so we don't
+        // spawn a second stream and race two assistant bubbles.
+        return;
+      }
       if (!cur.hydrated) {
         setError('still loading — try again in a moment');
         return;
@@ -472,6 +459,10 @@ RULES:
             });
           } else if (ev.type === 'tool_complete') {
             completeToolCall(ev.data.name ?? '', ev.data.result);
+          } else if (ev.type === 'alignment') {
+            // The agent persisted alignment findings on the server. Refresh
+            // the single user so the UI (and future turns) see them.
+            void useUserStore.getState().refreshMe();
           } else if (ev.type === 'title') {
             const cur = useSessionStore.getState().session;
             if (cur && ev.data.title) {
@@ -494,6 +485,9 @@ RULES:
             } else {
               updateMessage((m) => m.role === 'assistant' && !!m.streaming, { streaming: false });
             }
+            // Alignment findings may have been persisted server-side this
+            // turn even without an explicit `alignment` event.
+            void useUserStore.getState().refreshMe();
             break;
           } else if (ev.type === 'error') {
             setError(String(ev.data.error ?? 'unknown error'));
@@ -559,6 +553,49 @@ RULES:
     updateMessage((m) => m.role === 'assistant' && !!m.streaming, { streaming: false });
   }, [setStreamId, setStreaming, updateMessage]);
 
+  // ---- 6. On-demand alignment ----
+  //
+  // Bumped by requestAlignment() in the session store (the Header's
+  // "Re-align" button). Starts an agent-driven alignment conversation in
+  // the current session. The agent opens with its first question — no
+  // synthetic user bubble is stored, so we seed an empty assistant
+  // placeholder for the incoming tokens.
+
+  const runAlignment = useCallback(async () => {
+    const cur = useSessionStore.getState();
+    if (cur.isStreaming) return;
+    if (!cur.bootDone) return;
+    const sid = cur.session?.session_id;
+    if (!sid) return;
+    setError(null);
+    let streamId: string;
+    try {
+      const start = await gateway.startAlignment(sid);
+      streamId = start.stream_id;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    setStreaming(true);
+    setStreamId(streamId);
+    // Seed an empty assistant placeholder so token handlers can patch it.
+    const allMsgs = useSessionStore.getState().messages;
+    const last = allMsgs[allMsgs.length - 1];
+    if (!last || last.role !== 'assistant' || !last.streaming) {
+      appendToken('');
+    }
+    await consumeStream(streamId, sid);
+  }, [appendToken, consumeStream, setError, setStreamId, setStreaming]);
+
+  const alignToken = useSessionStore((s) => s.alignToken);
+  useEffect(() => {
+    if (alignToken === 0) return;
+    runAlignment().catch((e) => {
+      // eslint-disable-next-line no-console
+      console.warn('alignment failed:', e);
+    });
+  }, [alignToken, runAlignment]);
+
   // bootReady: hydrated AND bootDone. Composer uses this to enable.
   const bootReady = hydrated && bootDone;
 
@@ -571,5 +608,6 @@ RULES:
     sendMessage,
     cancel,
     setDraft,
+    runAlignment,
   };
 }

@@ -83,7 +83,11 @@ export function ChatMessage({ item }: { item: GatewayMessage }) {
     <div className="cm cm-assistant" data-streaming={isStillStreaming ? 'true' : undefined}>
       {/* Live turn overview: a clean activity line + chips, never a wall of text. */}
       {isStillStreaming ? (
-        <StreamingOverview thinking={hasThinking} toolCalls={item.tool_calls ?? []} />
+        <StreamingOverview
+          thinking={hasThinking}
+          reasoning={item.reasoning}
+          toolCalls={item.tool_calls ?? []}
+        />
       ) : hasThinking || hasToolCalls ? (
         <ActivitySummary reasoning={item.reasoning} toolCalls={item.tool_calls ?? []} />
       ) : null}
@@ -106,7 +110,15 @@ export function ChatMessage({ item }: { item: GatewayMessage }) {
 }
 
 /** Compact status row shown while the assistant is still working. */
-function StreamingOverview({ thinking, toolCalls }: { thinking: boolean; toolCalls: ToolCallRecord[] }) {
+function StreamingOverview({
+  thinking,
+  reasoning,
+  toolCalls,
+}: {
+  thinking: boolean;
+  reasoning?: string;
+  toolCalls: ToolCallRecord[];
+}) {
   const pendingTools = toolCalls.filter((c) => c.pending);
   const activeLabel =
     pendingTools.length > 0
@@ -116,6 +128,13 @@ function StreamingOverview({ thinking, toolCalls }: { thinking: boolean; toolCal
         : thinking
           ? 'Thinking'
           : 'Working';
+
+  // One-line preview of the live reasoning so the user can see the agent's
+  // train of thought without a wall of text. Full reasoning stays behind
+  // the collapsed ActivitySummary expander once the turn finishes.
+  const reasoningPreview = reasoning && reasoning.trim().length > 0
+    ? reasoning.trim().split('\n')[0].slice(0, 120)
+    : '';
 
   return (
     <div className="cm-overview">
@@ -137,6 +156,9 @@ function StreamingOverview({ thinking, toolCalls }: { thinking: boolean; toolCal
           </span>
         ))}
       </div>
+      {reasoningPreview ? (
+        <div className="cm-overview-reasoning" title={reasoning}>{reasoningPreview}{reasoning!.trim().length > 120 ? '…' : ''}</div>
+      ) : null}
     </div>
   );
 }

@@ -142,6 +142,39 @@ def cmd_serve(args: argparse.Namespace) -> None:
     run_server(host=host, port=port)
 
 
+def cmd_kill(args: argparse.Namespace) -> None:
+    """Kill any running Nalaris gateway process."""
+    import signal
+    killed = False
+    for pid_str in os.listdir("/proc"):
+        if not pid_str.isdigit():
+            continue
+        try:
+            exe = os.readlink(f"/proc/{pid_str}/exe")
+        except OSError:
+            continue
+        if "nalaris" not in exe and "project_rumah" not in exe:
+            continue
+        try:
+            with open(f"/proc/{pid_str}/cmdline", "rb") as f:
+                cmdline = f.read().replace(b"\x00", b" ").decode(errors="ignore")
+        except OSError:
+            continue
+        if "gateway.server" in cmdline or "nalaris-app serve" in cmdline:
+            print(f"Killing PID {pid_str}: {cmdline.strip()}")
+            try:
+                os.kill(int(pid_str), signal.SIGTERM)
+                killed = True
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                pass
+    if not killed:
+        print("No running Nalaris gateway found.")
+    else:
+        print("Sent stop signal to running gateway(s).")
+
+
 def cmd_config(args: argparse.Namespace) -> None:
     """Show or modify config."""
     config = _load_config()
@@ -313,6 +346,9 @@ def main():
     # build-panel
     sub.add_parser("build-panel", help="Build the panel and copy static files")
 
+    # kill
+    sub.add_parser("kill", help="Stop any running Nalaris gateway")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -324,6 +360,7 @@ def main():
         "config": cmd_config,
         "doctor": cmd_doctor,
         "build-panel": cmd_build_panel,
+        "kill": cmd_kill,
     }
     commands[args.command](args)
 

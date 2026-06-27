@@ -11,6 +11,7 @@ Matches the exact SSE protocol panel-v2's parseSse() expects:
 import asyncio
 import json
 import logging
+import queue as _queue
 from typing import AsyncGenerator, Optional
 
 logger = logging.getLogger(__name__)
@@ -22,17 +23,26 @@ def format_sse(event_type: str, data: dict) -> str:
 
 
 async def stream_from_queue(
-    queue: asyncio.Queue[Optional[dict]],
+    q: "_queue.Queue[Optional[dict]]",
 ) -> AsyncGenerator[str, None]:
     """
-    Async generator that reads events from a queue and yields SSE-formatted strings.
+    Async generator that drains a thread-safe queue.Queue and yields
+    SSE-formatted strings.
+
+    The agent pushes events from a background thread; we consume them here on
+    the SSE request's asyncio loop. Blocking ``q.get()`` is run in the default
+    executor so it doesn't block the loop, and ``queue.Queue`` is thread-safe
+    so cross-thread puts correctly wake the getter (unlike ``asyncio.Queue``).
 
     Stops when it receives None (sentinel) or the stream is cancelled.
     """
+    loop = asyncio.get_running_loop()
     try:
         while True:
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=120.0)
+                event = await asyncio.wait_for(
+                    loop.run_in_executor(None, q.get), timeout=120.0
+                )
             except asyncio.TimeoutError:
                 # Send keepalive comment
                 yield ": keepalive\n\n"
