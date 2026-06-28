@@ -17,7 +17,7 @@
  * VITE_GATEWAY_BASE is empty by default (same-origin relative paths).
  */
 
-const BASE = (import.meta.env.VITE_GATEWAY_BASE as string | undefined) ?? 'http://localhost:8790';
+const BASE = (import.meta.env.VITE_GATEWAY_BASE as string | undefined) || '';
 
 // ---------------------------------------------------------------------------
 // Session envelope
@@ -35,6 +35,19 @@ export interface ToolCallRecord {
   completedAt?: number;
   /** True while the tool is still executing. */
   pending?: boolean;
+}
+
+/** Compact, scannable summary emitted with cron/assistant messages.
+ *  Designed for smartwatch-sized surfaces and sticky "now" cards. */
+export interface CronSummary {
+  /** e.g. "14.30 · Focus block" — max ~30 chars. */
+  headline: string;
+  /** Single most important thing right now, max ~40 chars. */
+  primary?: string;
+  /** Next upcoming thing, max ~40 chars. */
+  secondary?: string;
+  /** Compact chips: habits / deadlines / energy. */
+  status?: string;
 }
 
 export interface GatewayMessage {
@@ -55,6 +68,12 @@ export interface GatewayMessage {
   tool_calls?: ToolCallRecord[];
   /** Structured UI blocks extracted from the assistant's response. */
   ui_blocks?: ServerBlock[];
+  /** Live phase of the assistant during an active SSE stream. */
+  stream_phase?: 'waiting' | 'context' | 'thinking' | 'tool_use' | 'writing';
+  /** Origin label, e.g. 'cron' for scheduled agent ticks. */
+  source?: string;
+  /** Short-form structured envelope. Used for notifications and sticky summary cards. */
+  short_content?: CronSummary | string;
 }
 
 export interface GatewaySession {
@@ -249,6 +268,19 @@ export const gateway = {
       workspace: (import.meta.env.VITE_WORKSPACE as string | undefined) ?? 'workspace',
       profile: (import.meta.env.VITE_PROFILE as string | undefined) ?? 'default',
     }),
+
+  // ── Web Push API ──
+
+  /** Get the VAPID public key needed for PushManager.subscribe(). */
+  getVapidPublicKey: () => get<{ public_key: string }>('/api/push/vapid-public-key'),
+
+  /** Save a push subscription on the server. */
+  subscribePush: (req: { subscription: PushSubscriptionJSON }) =>
+    post<{ ok: boolean; subscription?: unknown }>('/api/push/subscribe', req),
+
+  /** Remove a push subscription from the server. */
+  unsubscribePush: (req: { endpoint: string }) =>
+    post<{ ok: boolean; removed?: boolean }>('/api/push/unsubscribe', req),
 };
 
 // ---------------------------------------------------------------------------

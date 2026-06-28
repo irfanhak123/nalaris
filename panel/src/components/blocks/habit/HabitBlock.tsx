@@ -16,16 +16,18 @@ export function HabitBlock({ block }: { block: ServerBlock }) {
   };
 
   return (
-    <div className={`block habit ${block.data.done ? 'done' : ''}`}>
-      <label className="hb-row">
-        <input
-          type="checkbox"
-          checked={!!block.data.done}
-          onChange={toggle}
-          disabled={isStreaming}
-        />
-        <span className="hb-name">{block.data.name as string}</span>
-        {block.data.section ? <span className="hb-section">{block.data.section as string}</span> : null}
+    <div className={`block habit-block ${block.data.done ? 'done' : ''}`}>
+      <label className="habit-block-row">
+        <span className="habit-block-box">
+          <input
+            type="checkbox"
+            checked={!!block.data.done}
+            onChange={toggle}
+            disabled={isStreaming}
+          />
+        </span>
+        <span className="habit-block-name">{block.data.name as string}</span>
+        {block.data.section ? <span className="habit-block-section">{block.data.section as string}</span> : null}
       </label>
     </div>
   );

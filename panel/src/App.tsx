@@ -62,7 +62,7 @@ export default function App() {
         <div className="onboarding-card">
           <div className="onboarding-brand">
             <h1>Nalaris</h1>
-            <p>Loading...</p>
+            <p>Waking up the assistant…</p>
           </div>
           <div className="onboarding-step">
             <div className="onboarding-spinner" />
@@ -74,7 +74,7 @@ export default function App() {
 
   // Main chat UI (single-user — no picker, no onboarding form)
   return (
-    <div className="app-shell">
+    <div className="app">
       <Header />
       <main className="main">
         <Stream />

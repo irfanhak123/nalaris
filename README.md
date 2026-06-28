@@ -7,24 +7,29 @@
 ```bash
 # 1. Install Hermes Agent (if not already installed)
 #    See: https://hermes-agent.nousresearch.com/docs
+#    Hermes has its own Python virtual environment.
 
-# 2. Install Nalaris
-pip install -e .
+# 2. Install Nalaris *inside* the Hermes Agent virtual environment
+#    (Nalaris uses Hermes' Python packages such as openai and dotenv)
+HERMES_VENV="$HOME/.hermes/hermes-agent/venv"
+"$HERMES_VENV/bin/python" -m pip install -e .
 
 # 3. Check everything is set up
-nalaris-app doctor
+"$HERMES_VENV/bin/python" -m project_rumah.cli doctor
 
 # 4. Start the app
-nalaris-app serve
+"$HERMES_VENV/bin/python" -m project_rumah.cli serve
 # -> http://localhost:8790
 ```
 
-If `nalaris-app` is not in your PATH, use:
+If you already activated the Hermes venv, `nalaris-app serve` works too:
 ```bash
-python3 -m project_rumah.cli serve
+source "$HOME/.hermes/hermes-agent/venv/bin/activate"
+nalaris-app serve
 ```
 
-That's it. One install, one command.
+Running Nalaris from a different Python interpreter will fail with
+`No module named 'openai'` because it cannot import Hermes and its dependencies.
 
 ## What You Get
 
@@ -101,21 +106,22 @@ One process. One port. No Node.js at runtime.
 ## Development
 
 ```bash
-# Clone and install in dev mode
+# Clone and install in dev mode inside the Hermes Agent venv
 git clone https://github.com/irfanhak123/nalaris.git
 cd nalaris
-pip install -e ".[dev]"
+HERMES_VENV="$HOME/.hermes/hermes-agent/venv"
+"$HERMES_VENV/bin/python" -m pip install -e ".[dev]"
 
 # Panel development (hot reload)
 cd panel
 npm install
 npm run dev          # -> http://localhost:5173 (proxies to gateway :8790)
 
-# Gateway only (without bundled panel)
-RUMAH_STATIC_DIR=/dev/null nalaris-app serve
+# Gateway only (without bundled panel), using the Hermes venv
+RUMAH_STATIC_DIR=/dev/null "$HERMES_VENV/bin/python" -m project_rumah.cli serve
 
 # Build and bundle panel into the package
-nalaris-app build-panel
+"$HERMES_VENV/bin/python" -m project_rumah.cli build-panel
 # or manually:
 cd panel && npm run build
 cp -r dist/ ../src/project_rumah/static/

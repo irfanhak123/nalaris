@@ -83,10 +83,9 @@ export function ChatInput() {
         />
         {isStreaming ? (
           <button
-            className="composer-send"
+            className="composer-send stop"
             onClick={() => void cancel()}
             aria-label="Stop"
-            style={{ background: 'var(--paper)', color: 'var(--ink)' }}
           >
             <span className="spinner" /> Stop
           </button>

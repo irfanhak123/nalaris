@@ -57,9 +57,17 @@ export function ChecklistBlock({ block }: { block: ServerBlock }) {
     });
   };
 
+  const doneCount = items.filter((i) => i.done).length;
+  const total = items.length;
+
   return (
     <div className="block checklist-block">
-      {title ? <div className="cb-title">{title}</div> : null}
+      {title ? (
+        <div className="cb-head">
+          <div className="cb-title">{title}</div>
+          {total > 0 ? <div className="cb-progress">{doneCount}/{total}</div> : null}
+        </div>
+      ) : null}
       <ul className="checklist">
         {items.map((item, i) => (
           <li

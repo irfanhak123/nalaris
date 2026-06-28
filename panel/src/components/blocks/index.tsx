@@ -61,6 +61,7 @@ import { ErrorBlock } from './error/ErrorBlock';
 import { SuccessBlock } from './success/SuccessBlock';
 import { ChecklistBlock } from './checklist/ChecklistBlock';
 import { HeartbeatBlock } from './heartbeat/HeartbeatBlock';
+import { WeatherBlock } from './weather/WeatherBlock';
 
 type BlockComponent = ComponentType<{ block: ServerBlock }>;
 
@@ -109,6 +110,7 @@ export const blockRegistry: Record<string, BlockComponent> = {
   success: SuccessBlock as BlockComponent,
   checklist: ChecklistBlock as BlockComponent,
   heartbeat: HeartbeatBlock as BlockComponent,
+  weather: WeatherBlock as BlockComponent,
 };
 
 export type ServerBlockType = keyof typeof blockRegistry;

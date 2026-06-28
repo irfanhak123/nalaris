@@ -17,7 +17,7 @@ export function ProgressBlock({ block }: { block: ServerBlock }) {
     <div className={`block progress ${sev}`}>
       <div className="meta">
         <span>{d.label}</span>
-        <span>{cur}/{tot}</span>
+        <span>{cur}/{tot} · {pct}%</span>
       </div>
       <div className="track">
         <div className="fill" style={{ width: `${pct}%` }} />

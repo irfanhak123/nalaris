@@ -14,12 +14,21 @@ def data_dir() -> Path:
     Where the app stores its data (SQLite DB, session files, etc).
     Default: ~/.nalaris/data/
     Override: RUMAH_DATA_DIR env var.
+
+    Migration: if the legacy repo-relative data dir (/mnt/d/project-rumah/data)
+    already contains a gateway.db, keep using it so existing sessions are not
+    lost. New installs use ~/.nalaris/data/.
     """
     env_val = os.environ.get("RUMAH_DATA_DIR", "").strip()
     if env_val:
         p = Path(env_val)
     else:
-        p = Path.home() / ".nalaris" / "data"
+        # Preserve existing data location if a DB already lives there.
+        legacy_repo_data = Path(__file__).resolve().parent.parent.parent.parent / "data"
+        if (legacy_repo_data / "gateway.db").exists():
+            p = legacy_repo_data
+        else:
+            p = Path.home() / ".nalaris" / "data"
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -32,6 +41,15 @@ def db_path() -> Path:
 def panel_session_file() -> Path:
     """File where the panel writes its session ID for cron bridge."""
     return data_dir() / "panel-session-id"
+
+
+def legacy_panel_session_file() -> Path:
+    """Legacy /tmp bridge file used by the Hermes cron bridge script.
+
+    The gateway writes here too so cron ticks reach the live panel session
+    even when the bridge script was created before the move to ~/.nalaris/data.
+    """
+    return Path("/tmp/panel-gateway-session-id")
 
 
 def static_dir() -> Path:

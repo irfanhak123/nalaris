@@ -39,3 +39,25 @@ export function idSetHash(ids: ReadonlyArray<string>): string {
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+/** Format milliseconds as a human countdown: "2d 4h 12m 30s". */
+export function fmtCountdown(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+/** Format a future/past timestamp as relative text: "in 2h 5m" / "overdue by 3m". */
+export function fmtRelativeFuture(target: Date | string, now: number = Date.now()): { text: string; overdue: boolean } {
+  const t = typeof target === 'string' ? new Date(target) : target;
+  const diff = t.getTime() - now;
+  const overdue = diff < 0;
+  const text = fmtCountdown(Math.abs(diff));
+  return { text: overdue ? `overdue by ${text}` : `in ${text}`, overdue };
+}

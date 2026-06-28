@@ -25,7 +25,7 @@ export function CalendarDayBlock({ block }: { block: ServerBlock }) {
           <div className="t">{e.time}{e.end ? `–${e.end}` : ''}</div>
           <div className="ev">
             {e.title}
-            {e.note ? <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)', color: 'var(--gray-4)', marginLeft: 'var(--s-2)' }}>{e.note}</span> : null}
+            {e.note ? <span className="cal-note">{e.note}</span> : null}
           </div>
         </div>
       ))}

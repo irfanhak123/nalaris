@@ -24,7 +24,11 @@ classifiers = [
 
 # Zero hard dependencies — the gateway uses stdlib only.
 # hermes-agent is discovered at runtime (soft dependency).
-dependencies = []
+# pywebpush is required only for Web Push; it is installed by default because
+# it has no heavy runtime cost and lets users opt-in to push at runtime.
+dependencies = [
+    "pywebpush>=2.0.0",
+]
 
 [project.optional-dependencies]
 dev = [

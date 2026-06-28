@@ -8,6 +8,8 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useChat } from '../../hooks/useChat';
 import { ChatMessage } from './ChatMessage';
+import { StickyCron } from './StickyCron';
+import type { GatewayMessage } from '../../lib/gateway';
 
 const INITIAL_MSG_COUNT = 20;
 const LOAD_MORE_COUNT = 20;
@@ -46,6 +48,24 @@ export function Stream() {
     }
   }, [messages.length]);
 
+  // Latest cron message is the source of truth for the sticky "now" card.
+  const latestCron = [...messages]
+    .reverse()
+    .find((m) => m.role === 'assistant' && m.source === 'cron');
+
+  const scrollToMessage = useCallback((message: GatewayMessage) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const target = el.querySelector(`[data-timestamp="${message.timestamp}"]`);
+    if (target instanceof HTMLElement) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else {
+      // Fallback: message not in current view (loaded earlier). Expand the
+      // visible window and try again on next render.
+      setVisibleCount(messages.length);
+    }
+  }, [messages.length]);
+
   const hasContent = messages.length > 0;
   const showLoadEarlier = messages.length > visibleCount;
   const visibleMessages = messages.slice(-visibleCount);
@@ -59,6 +79,9 @@ export function Stream() {
           <EmptyState loading={false} error={null} />
         ) : (
           <>
+            {latestCron ? (
+              <StickyCron message={latestCron} onScrollToMessage={scrollToMessage} />
+            ) : null}
             {showLoadEarlier ? (
               <div className="stream-load-more">
                 <button
@@ -75,6 +98,7 @@ export function Stream() {
               <div
                 key={m.client_msg_id || `${m.role}-${m.timestamp}-${i}`}
                 className="block-enter"
+                data-timestamp={m.timestamp}
               >
                 <ChatMessage item={m} />
               </div>
@@ -108,8 +132,8 @@ function EmptyState({ loading, error }: { loading: boolean; error: string | null
   }
   return (
     <div className="empty">
-      <div className="t">Waiting for the agent</div>
-      <div className="s">The next cron tick will surface updates here. Or type a message below.</div>
+      <div className="t">What’s on your mind?</div>
+      <div className="s">Type a message below — the agent will check in with updates too.</div>
     </div>
   );
 }

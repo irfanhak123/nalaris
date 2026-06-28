@@ -104,6 +104,72 @@ def _load_hermes_env() -> None:
         pass
 
 
+def _hermes_venv_python() -> Path | None:
+    """Return the Python interpreter inside the Hermes venv, if it exists."""
+    try:
+        from .gateway import paths
+        root = paths.hermes_root()
+        candidate = root / "venv" / "bin" / "python"
+        if candidate.exists():
+            return candidate
+        candidate = root / "venv" / "Scripts" / "python.exe"
+        if candidate.exists():
+            return candidate
+    except Exception:
+        pass
+    return None
+
+
+def _running_in_hermes_venv() -> bool:
+    """Best-effort check that the current interpreter is the Hermes venv."""
+    venv_python = _hermes_venv_python()
+    if not venv_python:
+        return False
+    return Path(sys.executable).resolve() == venv_python.resolve()
+
+
+def _check_core_runtime_deps() -> list[tuple[str, bool, str]]:
+    """Lightweight check for the Hermes transitive deps Nalaris needs.
+
+    Does *not* import run_agent itself — that is heavy and slow. Used during
+    `serve` startup so the app still launches quickly.
+    """
+    checks: list[tuple[str, bool, str]] = []
+    for mod in ("openai", "dotenv"):
+        try:
+            __import__(mod)
+            checks.append((f"{mod} package", True, "importable"))
+        except ImportError as e:
+            checks.append((f"{mod} package", False, str(e)))
+    return checks
+
+
+def _check_runtime_deps() -> list[tuple[str, bool, str]]:
+    """Full check that Hermes and its core transitive dependencies are importable.
+
+    Used by `doctor`; slower because it imports run_agent.
+    """
+    checks: list[tuple[str, bool, str]] = []
+    checks.extend(_check_core_runtime_deps())
+
+    try:
+        from .gateway import paths
+        root = paths.hermes_root()
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+    except Exception as e:
+        checks.append(("Hermes Agent path", False, str(e)))
+        return checks
+
+    try:
+        import run_agent  # noqa: F401
+        checks.append(("Hermes run_agent", True, "importable"))
+    except Exception as e:
+        checks.append(("Hermes run_agent", False, str(e)))
+
+    return checks
+
+
 # -- Commands --
 
 def cmd_serve(args: argparse.Namespace) -> None:
@@ -124,6 +190,27 @@ def cmd_serve(args: argparse.Namespace) -> None:
         print(f"WARNING: {e}")
         print("The app will start but chat features will fail.\n")
 
+    # Check that we are running from the Hermes venv (or can import its deps)
+    if not _running_in_hermes_venv():
+        venv_python = _hermes_venv_python()
+        if venv_python:
+            print("WARNING: You are not running from the Hermes Agent virtual environment.")
+            print(f"  Current interpreter: {sys.executable}")
+            print(f"  Hermes venv python:  {venv_python}")
+            print("  Chat will fail unless Hermes and its dependencies (openai, dotenv, ...) are importable.")
+            print(f"  Recommended: {venv_python} -m project_rumah.cli serve\n")
+        else:
+            print("WARNING: Hermes Agent venv not found. Chat may fail if dependencies are missing.\n")
+    else:
+        print("Hermes venv:  active")
+
+    dep_checks = _check_core_runtime_deps()
+    for name, ok, detail in dep_checks:
+        if not ok:
+            print(f"WARNING: {name}: {detail}")
+    if any(not ok for _, ok, _ in dep_checks):
+        print()
+
     # Check static dir
     from .gateway import paths
     static = paths.static_dir()
@@ -142,6 +229,16 @@ def cmd_serve(args: argparse.Namespace) -> None:
     run_server(host=host, port=port)
 
 
+def cmd_push_keys(args: argparse.Namespace) -> None:
+    """Show or generate the VAPID public key for Web Push subscriptions."""
+    from .gateway import push_keys
+
+    keys = push_keys.get_keys()
+    print("VAPID public key (paste into the panel / service worker setup):")
+    print(keys.public_key_b64url())
+    print(f"Private key stored at: {push_keys.vapid_key_path()}")
+
+
 def cmd_kill(args: argparse.Namespace) -> None:
     """Kill any running Nalaris gateway process."""
     import signal
@@ -150,25 +247,26 @@ def cmd_kill(args: argparse.Namespace) -> None:
         if not pid_str.isdigit():
             continue
         try:
-            exe = os.readlink(f"/proc/{pid_str}/exe")
-        except OSError:
-            continue
-        if "nalaris" not in exe and "project_rumah" not in exe:
-            continue
-        try:
             with open(f"/proc/{pid_str}/cmdline", "rb") as f:
                 cmdline = f.read().replace(b"\x00", b" ").decode(errors="ignore")
         except OSError:
             continue
-        if "gateway.server" in cmdline or "nalaris-app serve" in cmdline:
-            print(f"Killing PID {pid_str}: {cmdline.strip()}")
-            try:
-                os.kill(int(pid_str), signal.SIGTERM)
-                killed = True
-            except ProcessLookupError:
-                pass
-            except PermissionError:
-                pass
+        if "gateway.server" not in cmdline and "nalaris-app serve" not in cmdline:
+            continue
+        try:
+            exe = os.readlink(f"/proc/{pid_str}/exe")
+        except OSError:
+            exe = ""
+        print(f"Killing PID {pid_str}: {cmdline.strip()}")
+        try:
+            os.kill(int(pid_str), signal.SIGTERM)
+            killed = True
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            print(f"  Permission denied for PID {pid_str} ({exe})")
+    if not killed:
+        print("No running Nalaris gateway found.")
     if not killed:
         print("No running Nalaris gateway found.")
     else:
@@ -247,11 +345,22 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         checks.append(("Data dir", False, f"Cannot create {data}"))
 
     # 5. Config
-    config = _load_config()
     if _CONFIG_FILE.exists():
         checks.append(("Config", True, str(_CONFIG_FILE)))
     else:
-        checks.append(("Config", True, f"Using defaults (no config file yet)"))
+        checks.append(("Config", True, "Using defaults (no config file yet)"))
+
+    # 6. Hermes venv / runtime deps
+    if _running_in_hermes_venv():
+        checks.append(("Hermes venv", True, "active"))
+    else:
+        venv_python = _hermes_venv_python()
+        if venv_python:
+            checks.append(("Hermes venv", False, f"Not active; use {venv_python}"))
+        else:
+            checks.append(("Hermes venv", False, "Not found"))
+
+    checks.extend(_check_runtime_deps())
 
     # Print results
     all_ok = True
@@ -349,6 +458,9 @@ def main():
     # kill
     sub.add_parser("kill", help="Stop any running Nalaris gateway")
 
+    # push-keys
+    sub.add_parser("push-keys", help="Show the VAPID public key for Web Push")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -361,6 +473,7 @@ def main():
         "doctor": cmd_doctor,
         "build-panel": cmd_build_panel,
         "kill": cmd_kill,
+        "push-keys": cmd_push_keys,
     }
     commands[args.command](args)
 

@@ -16,7 +16,7 @@ export function EmbedBlock({ block }: { block: ServerBlock }) {
   return (
     <div className="block embed">
       {d.href ? (
-        <a href={d.href} target="_blank" rel="noreferrer" style={{ display: 'contents' }}>{inner}</a>
+        <a className="embed-link" href={d.href} target="_blank" rel="noreferrer">{inner}</a>
       ) : (
         inner
       )}

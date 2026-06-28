@@ -84,6 +84,7 @@ export function ChatMessage({ item }: { item: GatewayMessage }) {
       {/* Live turn overview: a clean activity line + chips, never a wall of text. */}
       {isStillStreaming ? (
         <StreamingOverview
+          phase={item.stream_phase}
           thinking={hasThinking}
           reasoning={item.reasoning}
           toolCalls={item.tool_calls ?? []}
@@ -109,59 +110,80 @@ export function ChatMessage({ item }: { item: GatewayMessage }) {
   );
 }
 
-/** Compact status row shown while the assistant is still working. */
+/** Live activity overview. Clearly separates thinking, tool use, and writing. */
 function StreamingOverview({
+  phase,
   thinking,
   reasoning,
   toolCalls,
 }: {
+  phase?: string;
   thinking: boolean;
   reasoning?: string;
   toolCalls: ToolCallRecord[];
 }) {
-  const pendingTools = toolCalls.filter((c) => c.pending);
-  const activeLabel =
-    pendingTools.length > 0
-      ? `Using ${pendingTools.length} tool${pendingTools.length > 1 ? 's' : ''}`
-      : toolCalls.length > 0
-        ? 'Finished tools'
-        : thinking
-          ? 'Thinking'
-          : 'Working';
+  const doneTools = toolCalls.filter((c) => !c.pending);
+
+  const phaseConfig = PHASES[phase as keyof typeof PHASES] ?? PHASES.waiting;
 
   // One-line preview of the live reasoning so the user can see the agent's
   // train of thought without a wall of text. Full reasoning stays behind
   // the collapsed ActivitySummary expander once the turn finishes.
   const reasoningPreview = reasoning && reasoning.trim().length > 0
-    ? reasoning.trim().split('\n')[0].slice(0, 120)
+    ? reasoning.trim().split('\n')[0].slice(0, 140)
     : '';
 
   return (
     <div className="cm-overview">
       <div className="cm-overview-main">
-        <span className="cm-overview-pulse" aria-hidden="true" />
-        <span className="cm-overview-label">{activeLabel}</span>
+        <span className={`cm-overview-pulse ${phaseConfig.className}`} aria-hidden="true" />
+        <span className="cm-overview-label">{phaseConfig.label}</span>
       </div>
-      <div className="cm-overview-chips">
-        {thinking ? (
-          <span className="cm-chip cm-chip-thinking">
-            <span className="cm-chip-dot" />
-            Thinking
-          </span>
-        ) : null}
-        {toolCalls.map((call, i) => (
-          <span key={i} className={`cm-chip ${call.pending ? 'cm-chip-pending' : 'cm-chip-done'}`}>
-            {call.pending ? <span className="cm-chip-spinner" /> : <span className="cm-chip-check">✓</span>}
-            {call.name}
-          </span>
-        ))}
-      </div>
-      {reasoningPreview ? (
-        <div className="cm-overview-reasoning" title={reasoning}>{reasoningPreview}{reasoning!.trim().length > 120 ? '…' : ''}</div>
+
+      {thinking || reasoningPreview ? (
+        <div className="cm-overview-section">
+          <div className="cm-overview-section-title">Thinking</div>
+          {reasoningPreview ? (
+            <div className="cm-overview-reasoning" title={reasoning}>
+              {reasoningPreview}{reasoning!.trim().length > 140 ? '…' : ''}
+            </div>
+          ) : (
+            <div className="cm-overview-reasoning dim"> reasoning…</div>
+          )}
+        </div>
+      ) : null}
+
+      {toolCalls.length > 0 ? (
+        <div className="cm-overview-section">
+          <div className="cm-overview-section-title">
+            Tools {doneTools.length > 0 && (
+              <span className="cm-overview-count">{doneTools.length}/{toolCalls.length}</span>
+            )}
+          </div>
+          <ul className="cm-overview-tool-list">
+            {toolCalls.map((call, i) => (
+              <li key={i} className={call.pending ? 'pending' : 'done'}>
+                <span className="cm-overview-tool-status" aria-hidden="true">
+                  {call.pending ? <span className="spinner" style={{ width: 12, height: 12 }} /> : '✓'}
+                </span>
+                <code className="cm-overview-tool-name">{call.name}</code>
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : null}
     </div>
   );
 }
+
+const PHASES = {
+  waiting: { label: 'Waiting…', className: 'waiting' },
+  context: { label: 'Loading context…', className: 'context' },
+  thinking: { label: 'Thinking…', className: 'thinking' },
+  tool_use: { label: 'Using tools…', className: 'tool-use' },
+  writing: { label: 'Writing response…', className: 'writing' },
+};
+
 
 /** Minimal post-turn inspector. Default collapsed; keeps the final UI clean. */
 function ActivitySummary({ reasoning, toolCalls }: { reasoning?: string; toolCalls: ToolCallRecord[] }) {

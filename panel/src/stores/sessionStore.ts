@@ -61,6 +61,7 @@ interface SessionStoreState {
   setError: (e: string | null) => void;
   setBootDone: (v: boolean) => void;
   setHydrated: (v: boolean) => void;
+  setStreamPhase: (phase: GatewayMessage['stream_phase']) => void;
   markBlockAnswered: (blockId: string) => void;
   clearChat: () => Promise<void>;
   resetForUserSwitch: () => void;
@@ -98,21 +99,19 @@ export const useSessionStore = create<SessionStoreState>()(
         // per-30-min agent) can post back into the user's live chat. Without
         // this, cron messages land in whatever stale session id was last
         // written by the cron itself, never reaching the frontend.
-        // We POST to BOTH the panel-side bridge (port 8790) and try the
-        // gateway-side endpoint. The panel server (project-rumah) writes to
-        // /tmp/panel-gateway-session-id, which post-to-panel-session.sh reads.
+        // We POST to the panel bridge (same-origin so HTTPS/Tailscale loads work),
+        // which the gateway writes to /tmp/panel-gateway-session-id.
         try {
           if (typeof window !== 'undefined') {
             const writeBridges = (sid: string | null) => {
               const body = JSON.stringify({ session_id: sid });
-              // 1) Panel-side bridge (project-rumah, port 8790). The canonical
-              //    bridge — this is the one cron reads.
-              void fetch('http://localhost:8790/panel-session', {
+              // 1) Same-origin panel bridge. The gateway (project-rumah) writes
+              //    this to /tmp/panel-gateway-session-id, which cron reads.
+              void fetch('/panel-session', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body,
                 keepalive: true,
-                mode: 'cors',
               }).catch(() => { /* panel offline — cron falls back to local */ });
               // 2) Same-origin gateway bridge (if it exists). Best-effort.
               void fetch('/api/bridge/active-session', {
@@ -225,6 +224,13 @@ export const useSessionStore = create<SessionStoreState>()(
       setError: (e) => set({ error: e }),
       setBootDone: (v) => set({ bootDone: v }),
       setHydrated: (v) => set({ hydrated: v }),
+      setStreamPhase: (phase) => set((s) => {
+        const last = s.messages[s.messages.length - 1];
+        if (!last || last.role !== 'assistant' || !last.streaming) return {};
+        const next = s.messages.slice();
+        next[next.length - 1] = { ...last, stream_phase: phase };
+        return { messages: next };
+      }),
 
       markBlockAnswered: (blockId) => {
         const cur = get().answeredBlockIds;

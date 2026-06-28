@@ -15,14 +15,23 @@ import logging
 import os
 import signal
 import sys
-import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import parse_qs, urlsplit, unquote as _unquote
 
 from . import paths
+
+try:
+    from . import push
+except Exception:
+    push = None
+
+try:
+    from . import derive_summary
+except Exception:
+    derive_summary = None
 
 # ── Setup ──
 
@@ -264,6 +273,15 @@ class GatewayHandler(BaseHTTPRequestHandler):
             sessions = store.get_user_sessions(uid)
             return json_response(self, {"sessions": [_annotate_streaming(s) for s in sessions]})
 
+        # Push: VAPID public key for subscription
+        if path == "/api/push/vapid-public-key":
+            try:
+                from .push_keys import get_keys
+                return json_response(self, {"public_key": get_keys().public_key_b64url()})
+            except Exception as e:
+                logger.warning("VAPID key error: %s", e)
+                return json_response(self, {"error": "push not configured", "detail": str(e)}, 500)
+
         # Read session
         if path == "/api/session":
             session_id = qs.get("session_id", [""])[0]
@@ -416,6 +434,139 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 return json_response(self, {"error": "Session not found"}, 404)
             return json_response(self, {"ok": True, "session": session})
 
+        # Append a message to a session (cron / bridge delivery). Append-only:
+        # does NOT start a chat turn. The panel will see the message on its
+        # next poll. Role is usually "assistant" for cron ticks.
+        if path == "/api/session/message":
+            body = self._read_json_body()
+            session_id = body.get("session_id", "")
+            role = body.get("role", "")
+            content = body.get("content", "")
+            if not session_id:
+                return json_response(self, {"error": "session_id required"}, 400)
+            if role not in ("user", "assistant", "system", "tool"):
+                return json_response(self, {"error": "role must be one of user|assistant|system|tool"}, 400)
+
+            existing = store.get_session(session_id)
+            if not existing:
+                # Create the session on the fly so cron ticks don't bounce when
+                # the panel has not yet booted.
+                workspace = body.get("workspace", "")
+                profile = body.get("profile", "default")
+                title = body.get("title", "Cron delivery")
+                user_id = body.get("user_id")
+                store.create_session(session_id, workspace, profile, title, user_id=user_id)
+
+            try:
+                # Normalize source: if it looks like a cron tick but the
+                # bridge didn't set source, tag it now.
+                source = body.get("source")
+                if not source and derive_summary and derive_summary.looks_like_cron(body):
+                    source = "cron"
+
+                short_content = body.get("short_content")
+                # Derive a short_content envelope for cron-like messages that
+                # don't carry one, so the sticky "now" card always has a
+                # scannable summary.
+                if derive_summary and not short_content and source == "cron":
+                    ui_blocks = body.get("ui_blocks")
+                    short_content = derive_summary.derive_short_content(
+                        content,
+                        blocks=ui_blocks if isinstance(ui_blocks, list) else None,
+                    )
+
+                # ui_blocks may have been read above for summary derivation;
+                # use the same value for persistence.
+                ui_blocks = ui_blocks if 'ui_blocks' in locals() else body.get("ui_blocks")
+
+                msg = store.add_message(
+                    session_id,
+                    role,
+                    content,
+                    reasoning=body.get("reasoning"),
+                    tool_calls=body.get("tool_calls"),
+                    ui_blocks=ui_blocks,
+                    finish_reason=body.get("finish_reason"),
+                    client_msg_id=body.get("client_msg_id"),
+                    source=source,
+                    short_content=short_content,
+                )
+
+                # Forward assistant/cron messages to Web Push so Android
+                # devices get native notifications even when the tab is closed.
+                # Prefer the structured short_content envelope for the
+                # notification body; fall back to extracting from the full
+                # block content.
+                notify = body.get("notify")
+                if push and os.environ.get("RUMAH_PUSH_ENABLED", "1") == "1":
+                    if notify is True or (
+                        role == "assistant"
+                        and notify is not False
+                        and (source == "cron" or title == "Cron delivery" or not source)
+                    ):
+                        try:
+                            short = msg.get("short_content")
+                            if isinstance(short, dict):
+                                explicit_title = short.get("headline", body.get("push_title"))
+                                explicit_body = " · ".join(
+                                    v for k, v in [
+                                        ("primary", short.get("primary")),
+                                        ("secondary", short.get("secondary")),
+                                        ("status", short.get("status")),
+                                    ] if v
+                                )
+                            else:
+                                explicit_title = body.get("push_title")
+                                explicit_body = body.get("push_body")
+                            push.send_push_for_cron_message(
+                                store,
+                                content,
+                                session_id,
+                                user_id=body.get("user_id") or "me",
+                                explicit_title=explicit_title,
+                                explicit_body=explicit_body,
+                                short_content=short if isinstance(short, dict) else None,
+                            )
+                        except Exception as pe:
+                            logger.warning("Cron push failed: %s", pe)
+
+                return json_response(self, {"ok": True, "message": msg})
+            except Exception as e:
+                logger.exception("session/message error")
+                return json_response(self, {"error": str(e)}, 500)
+
+        # Push: subscribe / unsubscribe
+        if path == "/api/push/subscribe":
+            body = self._read_json_body()
+            subscription = body.get("subscription")
+            if not isinstance(subscription, dict):
+                return json_response(self, {"error": "subscription object required"}, 400)
+            endpoint = subscription.get("endpoint", "")
+            keys = subscription.get("keys", {})
+            p256dh = keys.get("p256dh", "")
+            auth = keys.get("auth", "")
+            if not endpoint or not p256dh or not auth:
+                return json_response(self, {"error": "endpoint, p256dh, auth required"}, 400)
+            user_id = body.get("user_id") or "me"
+            try:
+                sub = store.save_push_subscription(user_id, endpoint, p256dh, auth)
+                return json_response(self, {"ok": True, "subscription": sub})
+            except Exception as e:
+                logger.exception("push subscribe error")
+                return json_response(self, {"error": str(e)}, 500)
+
+        if path == "/api/push/unsubscribe":
+            body = self._read_json_body()
+            endpoint = body.get("endpoint", "")
+            if not endpoint:
+                return json_response(self, {"error": "endpoint required"}, 400)
+            try:
+                removed = store.delete_push_subscription(endpoint)
+                return json_response(self, {"ok": True, "removed": removed})
+            except Exception as e:
+                logger.exception("push unsubscribe error")
+                return json_response(self, {"error": str(e)}, 500)
+
         # Start chat turn
         if path == "/api/chat/start":
             try:
@@ -511,6 +662,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return json_response(self, {"error": "session_id required"}, 400)
         try:
             paths.panel_session_file().write_text(session_id)
+            # Keep the legacy /tmp bridge file in sync so the Hermes cron
+            # bridge script (which predates the ~/.nalaris/data path) reads
+            # the same session id.
+            try:
+                paths.legacy_panel_session_file().write_text(session_id)
+            except OSError:
+                pass  # /tmp may be unavailable — non-fatal
             return json_response(self, {"ok": True, "session_id": session_id})
         except OSError as e:
             return json_response(self, {"ok": False, "error": str(e)}, 500)

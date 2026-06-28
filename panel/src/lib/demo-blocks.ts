@@ -297,4 +297,19 @@ export const demoBlocks: ServerBlock[] = [
     weight: 15,
     data: { text: 'Panel-v2 now supports 43 procedural block types.' },
   },
+
+  // ── Weather ──
+  {
+    id: id('weather'),
+    type: 'weather',
+    weight: 14,
+    data: {
+      location: 'Inspire Arena, Parongpong',
+      temp: '22-24C',
+      condition: 'Light drizzle most of the afternoon',
+      rain_chance: '100%',
+      wind: 'Bandung highland breeze',
+      advice: 'Rain starts around 2pm and drizzles through 7pm. At 4pm there is a brief gap (0mm) but the field will be wet. Bring shoes for slippery ground.',
+    },
+  },
 ];

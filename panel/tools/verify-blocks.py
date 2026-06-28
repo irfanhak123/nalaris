@@ -350,6 +350,10 @@ BLOCK_TYPES: dict[str, dict[str, Any]] = {
         "required": [],
         "optional": ["label", "sub"],
     },
+    "weather": {
+        "required": [],
+        "optional": ["location", "temp", "condition", "rain_chance", "wind", "advice"],
+    },
     "skeleton": {
         "required": [],
         "optional": ["lines", "width"],

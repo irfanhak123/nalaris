@@ -74,6 +74,7 @@ export function useChat() {
   const appendToolCall = useSessionStore((s) => s.appendToolCall);
   const completeToolCall = useSessionStore((s) => s.completeToolCall);
   const setUiBlocks = useSessionStore((s) => s.setUiBlocks);
+  const setStreamPhase = useSessionStore((s) => s.setStreamPhase);
   const setError = useSessionStore((s) => s.setError);
   const setDraft = useSessionStore((s) => s.setDraft);
   const setBootDone = useSessionStore((s) => s.setBootDone);
@@ -149,13 +150,15 @@ export function useChat() {
         setMessages(reconcileMessages(localMsgs, full.session.messages ?? []));
         setBootDone(true);
 
-        // Persist session_id to the FastAPI server so the cron agent
-        // can post its output to this session (cron -> panel bridge).
+        // Persist session_id to the gateway so the Hermes cron agent can
+        // post its output to this session (cron -> panel bridge). Use the
+        // resolved session id, not the local `sid` variable: the gateway
+        // may have returned a different id on session creation.
         try {
           await fetch('/panel-session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session_id: sid }),
+            body: JSON.stringify({ session_id: full.session.session_id }),
           });
         } catch { /* non-fatal -- cron bridge is best-effort */ }
 
@@ -419,6 +422,7 @@ export function useChat() {
       const lastMsg = curMsgs[curMsgs.length - 1];
       if (!lastMsg || lastMsg.role !== 'assistant' || !lastMsg.streaming) {
         appendToken('');
+        setStreamPhase('waiting');
       }
 
       try {
@@ -448,8 +452,10 @@ export function useChat() {
               };
               useSessionStore.setState({ messages: next });
             }
+            setStreamPhase('writing');
           } else if (ev.type === 'reasoning') {
             appendReasoning(ev.data.text ?? '');
+            setStreamPhase('thinking');
           } else if (ev.type === 'tool') {
             appendToolCall({
               name: ev.data.name ?? 'unknown',
@@ -457,8 +463,15 @@ export function useChat() {
               pending: true,
               startedAt: Date.now() / 1000,
             });
+            setStreamPhase('tool_use');
           } else if (ev.type === 'tool_complete') {
             completeToolCall(ev.data.name ?? '', ev.data.result);
+            const state = useSessionStore.getState();
+            const last = state.messages[state.messages.length - 1];
+            const stillPending = last?.tool_calls?.some((tc) => tc.pending) ?? false;
+            setStreamPhase(stillPending ? 'tool_use' : 'writing');
+          } else if (ev.type === 'context_status' || ev.type === 'metering') {
+            setStreamPhase('context');
           } else if (ev.type === 'alignment') {
             // The agent persisted alignment findings on the server. Refresh
             // the single user so the UI (and future turns) see them.
@@ -516,7 +529,7 @@ export function useChat() {
         }
       }
     },
-    [appendToken, appendReasoning, appendToolCall, completeToolCall, setUiBlocks, setActive, setMessages, setStreamId, setStreaming, setError, updateMessage],
+    [appendToken, appendReasoning, appendToolCall, completeToolCall, setUiBlocks, setStreamPhase, setActive, setMessages, setStreamId, setStreaming, setError, updateMessage],
   );
 
   // ---- attachToStream ----
@@ -533,10 +546,11 @@ export function useChat() {
       const last = allMsgs[allMsgs.length - 1];
       if (!last || last.role !== 'assistant' || !last.streaming) {
         appendToken('');
+        setStreamPhase('waiting');
       }
       await consumeStream(streamId, sid);
     },
-    [appendToken, setStreamId, setStreaming, consumeStream],
+    [appendToken, setStreamId, setStreaming, setStreamPhase, consumeStream],
   );
 
 
@@ -583,9 +597,10 @@ export function useChat() {
     const last = allMsgs[allMsgs.length - 1];
     if (!last || last.role !== 'assistant' || !last.streaming) {
       appendToken('');
+      setStreamPhase('waiting');
     }
     await consumeStream(streamId, sid);
-  }, [appendToken, consumeStream, setError, setStreamId, setStreaming]);
+  }, [appendToken, consumeStream, setError, setStreamId, setStreaming, setStreamPhase]);
 
   const alignToken = useSessionStore((s) => s.alignToken);
   useEffect(() => {

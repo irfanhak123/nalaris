@@ -1,5 +1,6 @@
 import type { ServerBlock } from '../../../schemas/blocks.server';
 import { BlockRenderer } from '../index';
+import { RichContent } from '../../rich/RichContent';
 
 interface SectionData {
   title?: string;
@@ -20,7 +21,7 @@ export function SectionBlock({ block }: { block: ServerBlock }) {
         {d.meta ? <div className="meta">{d.meta}</div> : null}
       </div>
       {typeof d.body === 'string'
-        ? <div>{d.body}</div>
+        ? <RichContent content={d.body} />
         : isBlock(d.body)
           ? <BlockRenderer block={d.body} />
           : null}

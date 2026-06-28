@@ -10,9 +10,11 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
-_DB_PATH = Path("/mnt/d/project-rumah/data/gateway.db")
+from . import paths
+
+_DB_PATH = paths.db_path()
 
 
 class SessionStore:
@@ -66,16 +68,52 @@ class SessionStore:
                     tool_calls   TEXT DEFAULT NULL,   -- JSON array
                     ui_blocks    TEXT DEFAULT NULL,    -- JSON array
                     finish_reason TEXT DEFAULT NULL,
-                    client_msg_id TEXT DEFAULT NULL
+                    client_msg_id TEXT DEFAULT NULL,
+                    source        TEXT DEFAULT NULL,   -- 'cron', 'user', 'alignment', etc.
+                    short_content TEXT DEFAULT NULL    -- JSON: compact summary envelope
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_messages_session
                     ON messages(session_id, id);
+
+                CREATE TABLE IF NOT EXISTS push_subscriptions (
+                    id          TEXT PRIMARY KEY,
+                    user_id     TEXT NOT NULL,
+                    endpoint    TEXT NOT NULL UNIQUE,
+                    p256dh      TEXT NOT NULL,
+                    auth        TEXT NOT NULL,
+                    created_at  REAL NOT NULL,
+                    updated_at  REAL NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user
+                    ON push_subscriptions(user_id, updated_at DESC);
             """)
             # Migrate: add user_id column to sessions if missing
             cols = {r[1] for r in self._conn.execute("PRAGMA table_info(sessions)").fetchall()}
             if "user_id" not in cols:
                 self._conn.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT DEFAULT NULL")
+            # Migrate: add source/short_content columns to messages if missing
+            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(messages)").fetchall()}
+            if "source" not in cols:
+                self._conn.execute("ALTER TABLE messages ADD COLUMN source TEXT DEFAULT NULL")
+            if "short_content" not in cols:
+                self._conn.execute("ALTER TABLE messages ADD COLUMN short_content TEXT DEFAULT NULL")
+            # Migrate: ensure push_subscriptions table exists for existing databases
+            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(push_subscriptions)").fetchall()}
+            if not cols:
+                self._conn.executescript("""
+                    CREATE TABLE push_subscriptions (
+                        id          TEXT PRIMARY KEY,
+                        user_id     TEXT NOT NULL,
+                        endpoint    TEXT NOT NULL UNIQUE,
+                        p256dh      TEXT NOT NULL,
+                        auth        TEXT NOT NULL,
+                        created_at  REAL NOT NULL,
+                        updated_at  REAL NOT NULL
+                    );
+                    CREATE INDEX idx_push_subscriptions_user ON push_subscriptions(user_id, updated_at DESC);
+                """)
             self._conn.commit()
 
     # ── Sessions ──
@@ -148,20 +186,25 @@ class SessionStore:
         ui_blocks: list = None,
         finish_reason: str = None,
         client_msg_id: str = None,
+        source: str = None,
+        short_content: dict | str | None = None,
     ) -> dict:
         now = time.time()
+        short_json = None
+        if short_content is not None:
+            short_json = json.dumps(short_content) if not isinstance(short_content, str) else short_content
         with self._lock:
             cursor = self._conn.execute(
                 """INSERT INTO messages
                    (session_id, role, content, timestamp, reasoning, tool_calls,
-                    ui_blocks, finish_reason, client_msg_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    ui_blocks, finish_reason, client_msg_id, source, short_content)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id, role, content, now,
                     reasoning,
                     json.dumps(tool_calls) if tool_calls else None,
                     json.dumps(ui_blocks) if ui_blocks else None,
-                    finish_reason, client_msg_id,
+                    finish_reason, client_msg_id, source, short_json,
                 ),
             )
             self._conn.execute(
@@ -174,6 +217,9 @@ class SessionStore:
             "id": msg_id, "role": role, "content": content, "timestamp": now,
             "reasoning": reasoning, "tool_calls": tool_calls or [],
             "ui_blocks": ui_blocks or [], "finish_reason": finish_reason,
+            "client_msg_id": client_msg_id,
+            "source": source,
+            "short_content": short_content if isinstance(short_content, dict) else short_json,
         }
 
     def get_messages(self, session_id: str) -> list[dict]:
@@ -387,6 +433,7 @@ class SessionStore:
     def _row_to_message(self, row) -> dict:
         tool_calls = None
         ui_blocks = None
+        short_content = None
         try:
             if row[6]:
                 tool_calls = json.loads(row[6])
@@ -397,6 +444,11 @@ class SessionStore:
                 ui_blocks = json.loads(row[7])
         except (json.JSONDecodeError, TypeError):
             pass
+        try:
+            if row[11]:
+                short_content = json.loads(row[11])
+        except (json.JSONDecodeError, TypeError):
+            short_content = row[11] or None
         return {
             "id": row[0],
             "role": row[2],
@@ -407,6 +459,73 @@ class SessionStore:
             "ui_blocks": ui_blocks or [],
             "finish_reason": row[8] or None,
             "client_msg_id": row[9] or None,
+            "source": row[10] or None,
+            "short_content": short_content,
+        }
+
+    # ── Push subscriptions ──
+
+    def save_push_subscription(
+        self,
+        user_id: str,
+        endpoint: str,
+        p256dh: str,
+        auth: str,
+    ) -> dict:
+        """Save or update a Web Push subscription for a user."""
+        now = time.time()
+        sub_id = f"ps-{int(now * 1000):x}"
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO push_subscriptions
+                   (id, user_id, endpoint, p256dh, auth, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(endpoint) DO UPDATE SET
+                       user_id = excluded.user_id,
+                       p256dh = excluded.p256dh,
+                       auth = excluded.auth,
+                       updated_at = excluded.updated_at""",
+                (sub_id, user_id, endpoint, p256dh, auth, now, now),
+            )
+            self._conn.commit()
+        return self._get_push_subscription_by_endpoint(endpoint)  # type: ignore
+
+    def get_push_subscriptions(self, user_id: str) -> list[dict]:
+        """Return all active push subscriptions for a user."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM push_subscriptions WHERE user_id = ? ORDER BY updated_at DESC",
+                (user_id,),
+            ).fetchall()
+        return [self._row_to_push_subscription(r) for r in rows]
+
+    def delete_push_subscription(self, endpoint: str) -> bool:
+        """Delete a push subscription by endpoint (e.g. when the browser unsubscribes)."""
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM push_subscriptions WHERE endpoint = ?",
+                (endpoint,),
+            )
+            self._conn.commit()
+            return cursor.rowcount > 0
+
+    def _get_push_subscription_by_endpoint(self, endpoint: str) -> Optional[dict]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM push_subscriptions WHERE endpoint = ?",
+                (endpoint,),
+            ).fetchone()
+        return self._row_to_push_subscription(row) if row else None
+
+    def _row_to_push_subscription(self, row) -> dict:
+        return {
+            "id": row[0],
+            "user_id": row[1],
+            "endpoint": row[2],
+            "p256dh": row[3],
+            "auth": row[4],
+            "created_at": row[5],
+            "updated_at": row[6],
         }
 
     def close(self) -> None:
